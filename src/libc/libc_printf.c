@@ -15,11 +15,11 @@
 
 /* pointers: fp=u32 *, g0=const char *, g13=u64 *, r4=u64 * */
 
-extern void libc_printf_dispatch(void);
+extern void *libc_printf_dispatch(void *arg0, u32 arg1, u32 arg2);
 
 void libc_printf(const char * fmt, u32 arg1, u32 arg2)
 {
-    static u64 printf_va_scratch[4];
+    static u64 printf_va_scratch[5];
     uintptr_t va_base;
     uintptr_t sp_save = sp;
     uintptr_t fp_save = fp;
@@ -46,7 +46,7 @@ void libc_printf(const char * fmt, u32 arg1, u32 arg2)
     r5 = 4;
     *(u64 *)(va_base + 0x20) = (u64)g8;
     r4 = va_base;
-    libc_printf_dispatch();
+    libc_printf_dispatch((void *)fmt, arg1, arg2);
     g8 = r6;
     g10 = r8;
     fp = fp_save;

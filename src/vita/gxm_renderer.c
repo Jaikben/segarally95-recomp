@@ -11,6 +11,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <vita2d.h>
+#if defined(I960_HOST_VITA_GXM)
+#include <psp2/kernel/processmgr.h>
+static uint64_t g_performance_time;
+static unsigned g_performance_frame;
+#endif
 
 enum {
     SOURCE_CAP = 256,
@@ -54,6 +59,9 @@ static void clear_sources(void)
 
 static int fail(const char *what)
 {
+    char message[192];
+    snprintf(message, sizeof(message), "runtime: native GXM error: %s\n", what);
+    vita_startup_log(message);
     fprintf(stderr, "lift: native GXM: %s\n", what);
     return -1;
 }
@@ -265,7 +273,7 @@ static int draw_triangle(const vita_screen_vertex_t v[3], const model2_geo_tri_m
     unsigned i, j, count = 0;
     unsigned alpha = (m->flags & MODEL2_GEO_TEX_CHECKER) ? 128 : 255;
     if (m->flags & MODEL2_GEO_TEX_TEXTURED) {
-        const unsigned subdivisions = 4;
+        const unsigned subdivisions = v[0].q == v[1].q && v[1].q == v[2].q ? 1u : 4u;
         const vita2d_texture *texture = material_for(m);
         vita2d_texture_vertex *vertices;
         unsigned w = m->patch_w ? m->patch_w : 32;
@@ -424,15 +432,28 @@ int vita_gxm_present(const u32 *bottom, const u32 *priority, int opaque,
     float hud_x = (960.0f - SYS24_FB_WIDTH * hud_scale) * 0.5f;
     float geo_w = model2_host_aspect_is_widescreen() ? 960.0f : SYS24_FB_WIDTH * hud_scale;
     int result = 0;
+#if defined(I960_HOST_VITA_GXM)
+    uint64_t frame_started = sceKernelGetProcessTimeWide();
+#endif
     if (!g_initialized || !bottom || !priority)
         return fail("present called without initialized tile buffers");
     if (paused) {
+#if defined(I960_HOST_VITA_GXM)
+        g_performance_time = 0;
+#endif
         vita_gxm_menu(1);
         return 0;
     }
     g_diagnostic_frames++;
+#if defined(I960_HOST_VITA_GXM)
+    if (!g_performance_time) {
+        g_performance_time = frame_started;
+        g_performance_frame = g_diagnostic_frames - 1u;
+    }
+#endif
     g_diagnostic_due = g_diagnostic_frames <= 3u
-        || (g_diagnostic_frames <= 1800u && g_diagnostic_frames % 120u == 0);
+        || (g_diagnostic_frames <= 1800u && g_diagnostic_frames % 120u == 0)
+        || g_diagnostic_frames % 300u == 0;
     g_diagnostic_triangles = 0;
     g_diagnostic_geometry = opaque ? "tiles only" : "not started";
     if (g_diagnostic_due) {
@@ -480,6 +501,21 @@ int vita_gxm_present(const u32 *bottom, const u32 *priority, int opaque,
                  g_diagnostic_frames, g_diagnostic_geometry, g_diagnostic_triangles, result);
         vita_startup_log(message);
     }
+#if defined(I960_HOST_VITA_GXM)
+    if (g_diagnostic_frames % 300u == 0) {
+        char message[160];
+        uint64_t now = sceKernelGetProcessTimeWide();
+        uint64_t elapsed = now - g_performance_time;
+        snprintf(message, sizeof(message),
+                 "runtime: performance frame=%u fps=%.2f present_us=%llu\n",
+                 g_diagnostic_frames,
+                 elapsed ? 1000000.0 * (g_diagnostic_frames - g_performance_frame) / elapsed : 0.0,
+                 (unsigned long long)(now - frame_started));
+        vita_startup_log(message);
+        g_performance_time = now;
+        g_performance_frame = g_diagnostic_frames;
+    }
+#endif
     return result;
 }
 
@@ -500,6 +536,10 @@ void vita_gxm_shutdown(void)
     vita2d_fini();
     g_initialized = 0;
     g_diagnostic_frames = 0;
+#if defined(I960_HOST_VITA_GXM)
+    g_performance_time = 0;
+    g_performance_frame = 0;
+#endif
 }
 
 void vita_gxm_message(const char *title, const char *detail)

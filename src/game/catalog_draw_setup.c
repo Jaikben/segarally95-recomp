@@ -74,7 +74,7 @@ static int cgm_prefix_match(u32 catalog_vaddr)
     return 0;
 }
 
-u32 catalog_draw_setup(u32 arg0, u32 arg1, u32 arg2)
+static u32 catalog_draw_setup_inner(u32 arg0, u32 arg1, u32 arg2)
 {
     /* Credit catalogs (INSERT COIN @ 0x288B01C, etc.) are real CGM 1.0 headers
      * in main_data @ MAIN_DATA_A — not mid-stream pointers. */
@@ -257,4 +257,12 @@ u32 catalog_draw_setup(u32 arg0, u32 arg1, u32 arg2)
         libc_printf((const char *)(uintptr_t)g0, g1, g2);
     g0 = 0u - 1u;
     return (u32)g0;
+}
+
+u32 catalog_draw_setup(u32 arg0, u32 arg1, u32 arg2)
+{
+    uintptr_t sp_save = sp;
+    u32 result = catalog_draw_setup_inner(arg0, arg1, arg2);
+    sp = sp_save;
+    return result;
 }

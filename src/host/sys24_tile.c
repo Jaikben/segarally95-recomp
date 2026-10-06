@@ -26,6 +26,7 @@ enum {
 typedef struct {
     u16 pixmap[SYS24_PIXMAP_WIDTH * SYS24_PIXMAP_HEIGHT];
     u8  flags[SYS24_PIXMAP_WIDTH * SYS24_PIXMAP_HEIGHT];
+    u16 names[SYS24_LAYER_TILES];
 } sys24_layer_cache_t;
 
 struct sys24_tile_state {
@@ -36,7 +37,10 @@ struct sys24_tile_state {
     const u16          *char_ram;
     sys24_layer_cache_t layers[SYS24_LAYER_COUNT];
     /* MAME mark_tile_dirty equivalent — scroll must not invalidate. */
-    u32                 content_sig;
+    u32                 content_generation;
+    u8                  glyphs[SYS24_TILES][32];
+    u8                  glyph_checked[SYS24_TILES];
+    u8                  glyph_changed[SYS24_TILES];
     int                 layers_valid;
 };
 
@@ -70,6 +74,10 @@ sys24_tile_state_t *sys24_tile_create(u16 tile_mask)
 {
     sys24_tile_state_t *st;
 
+    if (tile_mask >= SYS24_TILES) {
+        fprintf(stderr, "lift: invalid System-24 tile mask: %#x\n", tile_mask);
+        return NULL;
+    }
     st = (sys24_tile_state_t *)calloc(1, sizeof(*st));
     if (!st)
         return NULL;
@@ -95,43 +103,37 @@ void sys24_tile_bind(sys24_tile_state_t *st, const u8 *tile_map, const u8 *char_
     st->char_ram = char_ram ? (const u16 *)(const void *)char_ram : NULL;
 }
 
-/* FNV-ish over tile name tables + char — excludes hscr line tables (scroll-only).
- * MAME segaic24 mark_tile_dirty on map/char writes; scroll is draw-time only. */
-static u32 tile_content_sig(const sys24_tile_state_t *st)
+static int glyph_changed(sys24_tile_state_t *st, u16 code)
 {
-    u32 h = 2166136261u;
-    unsigned i;
-    const u8 *map;
-
-    if (!st || !st->tile_map_bytes)
-        return 0;
-    map = st->tile_map_bytes;
-    /* Layer maps: 4 × 0x1000 words = 0x8000 bytes @ tile_ram[0]. */
-    for (i = 0; i < 0x8000u; i++)
-        h = (h ^ map[i]) * 16777619u;
-    if (st->char_ram_bytes) {
-        /* Char RAM is large; sample densely enough for CGM glyph uploads. */
-        for (i = 0; i < 0x10000u; i += 4u)
-            h = (h ^ st->char_ram_bytes[i]) * 16777619u;
+    if (!st->glyph_checked[code]) {
+        const u8 *bytes = st->char_ram_bytes + (unsigned)code * 32u;
+        st->glyph_changed[code] = !st->layers_valid
+            || memcmp(st->glyphs[code], bytes, 32u) != 0;
+        if (st->glyph_changed[code])
+            memcpy(st->glyphs[code], bytes, 32u);
+        st->glyph_checked[code] = 1;
     }
-    h ^= (u32)st->tile_mask;
-    return h;
+    return st->glyph_changed[code];
 }
 
-static void refresh_one_layer(sys24_tile_state_t *st, int layer_idx)
+static unsigned refresh_one_layer(sys24_tile_state_t *st, int layer_idx)
 {
     sys24_layer_cache_t *L;
     u32 map_base;
     int ty;
     int tx;
+    unsigned changed = 0;
 
     L = &st->layers[layer_idx];
     map_base = s_layer_map_offset[layer_idx];
-    memset(L->pixmap, 0, sizeof(L->pixmap));
-    memset(L->flags, 0, sizeof(L->flags));
-
-    if (!st->tile_ram || !st->char_ram_bytes)
-        return;
+    if (!st->tile_ram || !st->char_ram_bytes) {
+        if (!st->layers_valid) {
+            memset(L->pixmap, 0, sizeof(L->pixmap));
+            memset(L->flags, 0, sizeof(L->flags));
+            return SYS24_LAYER_TILES;
+        }
+        return 0;
+    }
 
     for (ty = 0; ty < 64; ty++) {
         for (tx = 0; tx < 64; tx++) {
@@ -147,6 +149,11 @@ static void refresh_one_layer(sys24_tile_state_t *st, int layer_idx)
             int py;
             int px;
 
+            int dirty = glyph_changed(st, code);
+            if (st->layers_valid && L->names[tidx] == val && !dirty)
+                continue;
+            L->names[tidx] = val;
+            changed++;
             for (py = 0; py < 8; py++) {
                 for (px = 0; px < 8; px++) {
                     u8 nib = sys24_gfx_pixel(st->char_ram_bytes, code, px, py);
@@ -162,30 +169,32 @@ static void refresh_one_layer(sys24_tile_state_t *st, int layer_idx)
             }
         }
     }
+    return changed;
 }
 
 void sys24_tile_refresh(sys24_tile_state_t *st)
 {
     int i;
+    unsigned changed = 0;
 
     if (!st)
         return;
+    memset(st->glyph_checked, 0, sizeof(st->glyph_checked));
     for (i = 0; i < SYS24_LAYER_COUNT; i++)
-        refresh_one_layer(st, i);
-    st->content_sig = tile_content_sig(st);
+        changed += refresh_one_layer(st, i);
+    if (changed)
+        st->content_generation++;
     st->layers_valid = 1;
 }
 
 void sys24_tile_ensure_refreshed(sys24_tile_state_t *st)
 {
-    u32 sig;
-
-    if (!st)
-        return;
-    sig = tile_content_sig(st);
-    if (st->layers_valid && sig == st->content_sig)
-        return;
     sys24_tile_refresh(st);
+}
+
+u32 sys24_tile_content_generation(const sys24_tile_state_t *st)
+{
+    return st ? st->content_generation : 0;
 }
 
 /*

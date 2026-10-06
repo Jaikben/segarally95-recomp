@@ -20,7 +20,7 @@ static void mode_apply_write_byte(u32 value)
     i960_st_u8(I960_WORKRAM, 0x202049, 0, (u8)value);
 }
 
-void geo_view_mode_apply(u32 arg0, u32 arg1, u32 arg2)
+static void geo_view_mode_apply_inner(u32 arg0, u32 arg1, u32 arg2)
 {
     u32 mode;
     u32 prev_c4;
@@ -151,6 +151,7 @@ mode_countdown:
             if ((i32)cc == -1)
                 i960_st_u32(I960_WORKRAM, 0x2142c8, 0, 0);
         }
+
     }
     return;
 
@@ -173,4 +174,11 @@ mode_latch3:
 mode_done_clear:
     /* fallthrough target of unknown mode — clear latch like 0x39EB8 */
     i960_st_u32(I960_WORKRAM, 0x2142c8, 0, 0);
+}
+
+void geo_view_mode_apply(u32 arg0, u32 arg1, u32 arg2)
+{
+    uintptr_t sp_save = sp;
+    geo_view_mode_apply_inner(arg0, arg1, arg2);
+    sp = sp_save;
 }

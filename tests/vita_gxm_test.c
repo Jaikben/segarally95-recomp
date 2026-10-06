@@ -20,8 +20,8 @@ static unsigned menu_highlights, menu_labels;
 static unsigned glyph_draws;
 static SceGxmContext context;
 static float mesh[] = {
-    -20, -20, 1, 0, 0, 20, -20, 1, 32, 0, 0, 20, 1, 16, 32,
-    -20, -20, 1, 0, 0, 20, -20, 1, 32, 0, 0, 20, 1, 16, 32
+    -20, -20, 1, 0, 0, 20, -20, 2, 32, 0, 0, 20, 3, 16, 32,
+    -20, -20, 1, 0, 0, 20, -20, 2, 32, 0, 0, 20, 3, 16, 32
 };
 static model2_geo_tri_mat_t mats[2];
 
@@ -199,6 +199,13 @@ int main(void)
     no_mesh = 0; gen++; wide = 1;
     CHECK(vita_gxm_present(bottom, priority, 0, 0, 0) == 0);
     CHECK(geometry_draws == 4 && waits >= 4);
+    {
+        unsigned before = geometry_vertices;
+        for (i = 0; i < 6; i++)
+            mesh[i * 5u + 2u] = 1;
+        CHECK(vita_gxm_present(bottom, priority, 0, 0, 0) == 0);
+        CHECK(geometry_vertices == before + 6u && geometry_draws == 6);
+    }
     exhaust_pool = 1;
     CHECK(vita_gxm_present(bottom, priority, 0, 0, 0) == -1);
     CHECK(!locked);

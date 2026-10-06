@@ -77,6 +77,7 @@ static u32 *g_bitmap_pri;   /* priority (odd) layers — over polygons */
 static u32 *g_tile_alpha; /* black-punched upload buffer for HUD overlay */
 static u32 *g_record_bgra; /* native 496×384 BGRA for async ffmpeg pipe */
 static u32 g_tile_sig;
+static u32 g_tile_generation;
 static int g_tile_valid;
 static int g_tile_tex_dirty;
 static const u32 *g_tile_upload_src; /* source for next GL tex upload */
@@ -1361,8 +1362,14 @@ int sys24_viewer_flip(const u8 *tile_map, const u8 *char_ram, const u8 *palram)
 
         {
             u32 sig = viewer_tile_sig(tile_map, char_ram, palram);
+            u32 generation;
+            sys24_tile_bind(g_tile, tile_map, char_ram);
+            if (!g_paused)
+                sys24_tile_ensure_refreshed(g_tile);
+            generation = sys24_tile_content_generation(g_tile);
 
-            if (!g_paused && (!g_tile_valid || sig != g_tile_sig)) {
+            if (!g_paused && (!g_tile_valid || sig != g_tile_sig
+                              || generation != g_tile_generation)) {
                 sys24_tile_bind(g_tile, tile_map, char_ram);
                 /*
                  * Attract ranking leaves ctrl bit14 (0x4000) in 0x20b91c →
@@ -1504,6 +1511,7 @@ int sys24_viewer_flip(const u8 *tile_map, const u8 *char_ram, const u8 *palram)
                     }
                 }
                 g_tile_sig = sig;
+                g_tile_generation = generation;
                 g_tile_valid = 1;
                 g_tile_tex_dirty = 1;
             }

@@ -81,6 +81,32 @@ int main(void)
         CHECK(storage[i] == 0xdeadbeefu);
         CHECK(storage[GUARD + PIXELS + i] == 0xdeadbeefu);
     }
+    {
+        u32 generation = sys24_tile_content_generation(tiles);
+        u32 *expected = malloc(PIXELS * sizeof(*expected));
+        sys24_tile_state_t *reference = sys24_tile_create(SYS24_TILE_MASK_M2);
+        CHECK(expected && reference);
+        sys24_tile_ensure_refreshed(tiles);
+        CHECK(sys24_tile_content_generation(tiles) == generation);
+        map[0x5002] = map[0x5006] = 0;
+        memset(map + 0x6800u, 0, SYS24_FB_HEIGHT * 4u * sizeof(*map));
+        for (i = 0; i < 0x1000u; i++)
+            map[0x2000u + i] = 0x3fffu;
+        for (i = 0; i < 32; i++) {
+            chars[0x3fffu * 32u + i] ^= 0x0fu;
+            sys24_tile_draw_layers_rgb32(tiles, storage + GUARD,
+                                        (const u8 *)palette, 0xff000000u, SYS24_PASS_BOTTOM);
+            CHECK(sys24_tile_content_generation(tiles) != generation);
+            generation = sys24_tile_content_generation(tiles);
+            sys24_tile_bind(reference, NULL, NULL);
+            sys24_tile_bind(reference, (const u8 *)map, chars);
+            sys24_tile_draw_layers_rgb32(reference, expected,
+                                        (const u8 *)palette, 0xff000000u, SYS24_PASS_BOTTOM);
+            CHECK(memcmp(expected, storage + GUARD, PIXELS * sizeof(*expected)) == 0);
+        }
+        sys24_tile_destroy(reference);
+        free(expected);
+    }
     sys24_tile_destroy(tiles);
     free(storage);
     free(palette);

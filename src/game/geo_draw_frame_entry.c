@@ -30,6 +30,7 @@ void geo_draw_frame_entry(u32 arg0, u32 arg1, u32 arg2)
     u32 wr_ptr;
     u32 ux, uy, uz;
     uintptr_t fp_save = fp;
+    uintptr_t sp_save = sp;
     u8 frame[0x50];
 
     (void)arg0;
@@ -127,4 +128,5 @@ void geo_draw_frame_entry(u32 arg0, u32 arg1, u32 arg2)
             i960_st_u32(I960_WORKRAM, PLACEMENT_CURSOR, 0, cursor);
         }
     }
+    sp = sp_save;
 }

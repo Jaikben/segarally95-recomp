@@ -305,6 +305,15 @@ if(SEGAMOD2_BUILD_VITA_TESTS)
   target_include_directories(segamod2_boot_reset_tests PRIVATE
     lib/model2/include lib/model2/host)
   add_test(NAME vita-boot-reset COMMAND segamod2_boot_reset_tests)
+  add_executable(segamod2_runtime_stack_tests tests/runtime_stack_test.c
+    src/game/geo_draw_frame_entry.c src/game/geo_view_mode_apply.c
+    src/game/catalog_draw_setup.c src/libc/libc_printf.c lib/model2/host/i960_regs.c)
+  target_include_directories(segamod2_runtime_stack_tests PRIVATE
+    include lib/model2/include lib/model2/host)
+  if(UNIX)
+    target_link_libraries(segamod2_runtime_stack_tests PRIVATE m)
+  endif()
+  add_test(NAME vita-runtime-stack COMMAND segamod2_runtime_stack_tests)
   add_executable(segamod2_sys24_tile_tests tests/sys24_tile_test.c
     src/host/sys24_tile.c src/host/sys24_gfx.c)
   target_include_directories(segamod2_sys24_tile_tests PRIVATE include lib/model2/host)

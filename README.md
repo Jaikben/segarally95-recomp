@@ -157,6 +157,14 @@ The boot wait-table copy checks the full 32-bit `0xffffffff` terminator and
 the 56-byte destination bound. A truncated terminator comparison previously
 overwrote the adjacent ROM pointer/size in the Vita build, leaving splash and
 geometry data inaccessible after SOUND INITIALIZE.
+Tile caches update only changed map entries and referenced 32-byte glyphs;
+scrolling and palette changes do not decode every layer again. Constant-depth
+textured triangles use one triangle instead of 16 equivalent subdivisions;
+varying-depth triangles retain the existing perspective approximation.
+Runtime GXM probes continue every 300 frames beyond the startup sampling
+window, with interval FPS and CPU-side presentation time. These are not GPU
+timings; a log ending without an error/exit marker does not establish the
+cause of an emulator termination.
 
 UI text uses a small built-in bitmap atlas drawn with native GXM. The application
 does not load firmware PGF/PVF fonts or call `scePgf`/`scePvf`; this avoids the
@@ -236,11 +244,13 @@ polygon ordering, tile stride/channel conversion, tessellation counts, GPU
 buffer lifetime and pool-failure handling. Software tile-compositor tests cover
 all 256 palette banks (4,096 pens), guarded scroll/wrap, line scrolling,
 priority and window masks. Boot-reset tests verify wait-table termination,
-ROM-state preservation and rejection of an oversized table:
+ROM-state preservation and rejection of an oversized table.
+Repeated runtime-call tests also check stack preservation and formatter
+argument/scratch safety across 10,000 iterations:
 
 ```sh
 cmake -S . -B build -DSEGAMOD2_BUILD_VITA_TESTS=ON
-cmake --build build --target segamod2_vita_tests segamod2_rom_cache_tests segamod2_boot_reset_tests segamod2_sys24_tile_tests segamod2_vita_menu_tests segamod2_vita_gxm_tests lift-check --parallel 4
+cmake --build build --target segamod2_vita_tests segamod2_rom_cache_tests segamod2_boot_reset_tests segamod2_runtime_stack_tests segamod2_sys24_tile_tests segamod2_vita_menu_tests segamod2_vita_gxm_tests lift-check --parallel 4
 ctest --test-dir build -R '^vita-' --output-on-failure
 ```
 

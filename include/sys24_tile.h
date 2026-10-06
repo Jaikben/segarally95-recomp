@@ -22,13 +22,16 @@ void sys24_tile_destroy(sys24_tile_state_t *st);
 /* Point at CPU tile map / char RAM (model2_rom byte buffers, little-endian u16). */
 void sys24_tile_bind(sys24_tile_state_t *st, const u8 *tile_map, const u8 *char_ram);
 
-/* Rebuild internal 512×512 layer pixmaps from bound RAM.
+/* Update changed tiles in the internal 512×512 layer pixmaps from bound RAM.
  * MAME segaic24 only mark_tile_dirty on VRAM writes — scroll alone must not
  * rebuild. Prefer sys24_tile_ensure_refreshed from the draw path. */
 void sys24_tile_refresh(sys24_tile_state_t *st);
 
 /* Refresh only when tile map / char bytes changed since last rebuild. */
 void sys24_tile_ensure_refreshed(sys24_tile_state_t *st);
+
+/* Changes only when map entries or referenced glyph bytes change. */
+u32 sys24_tile_content_generation(const sys24_tile_state_t *st);
 
 /* Model-2 RGB path: composite Sys24 layers per MAME model2_v / segaic24
  * draw_common (win mask + ctrl&0x6000). Ranking (bank @ 0x01002000) shows only

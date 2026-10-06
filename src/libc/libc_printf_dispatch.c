@@ -74,10 +74,7 @@ void * libc_printf_dispatch(void * arg0, u32 arg1, u32 arg2)
     sp = sp + 0x180;
     g8_save = (u64)g8;
     r5 = (uintptr_t)arg1;
-    /*
-     * libc_printf often calls with an empty prototype; prefer guest VA in g0
-     * (set by libc_printf) over a possibly-clobbered C arg0.
-     */
+    /* Preserve the lifted format address in g0 for guest-ROM lookup. */
     fmt_va = (u32)g0;
     if (fmt_va == 0 && arg0)
         fmt_va = (uintptr_t)arg0;
