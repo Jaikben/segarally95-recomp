@@ -12,6 +12,46 @@
 
 #include <stdio.h>
 
+#if defined(I960_HOST_VITA_GXM)
+#include "vita/startup_log.h"
+#include "vita/rom_diagnostic.h"
+#include <string.h>
+
+static void vita_splash_diagnostic(u32 catalog, u32 batch)
+{
+    const u8 *header = model2_rom_at(catalog);
+    const u8 *map = model2_tile_map_ptr();
+    const u8 *chars = model2_tile_char_ptr();
+    char message[256];
+    unsigned i, map_tiles = 0, char_bytes = 0;
+    vita_rom_diagnostic("after splash catalog");
+    for (i = 0x4000u; i < 0x6000u; i += 2u)
+        map_tiles += map[i] != 0 || map[i + 1u] != 0;
+    for (i = 0; i < MODEL2_TILE_CHAR_SIZE; i++)
+        char_bytes += chars[i] != 0;
+    snprintf(message, sizeof(message),
+             "runtime: splash catalog=0x%08x header_ok=%d batch=%u slot=%u batches=%u map2_tiles=%u char_bytes=%u palette_pending=%u\n",
+             (unsigned)catalog, header && memcmp(header, "CGM 1.0 ", 8) == 0,
+             (unsigned)batch,
+             (unsigned)i960_ld_u32(I960_WORKRAM, 0x20c950, 0),
+             (unsigned)i960_ld_u32(I960_WORKRAM, 0x20c954, 0),
+             map_tiles, char_bytes,
+             (unsigned)i960_ld_u32(I960_WORKRAM, 0x20b1f0, 0));
+    vita_startup_log(message);
+    snprintf(message, sizeof(message),
+             "runtime: splash layer regs=%04x/%04x/%04x/%04x/%04x/%04x/%04x/%04x\n",
+             (unsigned)i960_ld_u16(I960_WORKRAM, 0x20b914, 0),
+             (unsigned)i960_ld_u16(I960_WORKRAM, 0x20b916, 0),
+             (unsigned)i960_ld_u16(I960_WORKRAM, 0x20b918, 0),
+             (unsigned)i960_ld_u16(I960_WORKRAM, 0x20b91a, 0),
+             (unsigned)i960_ld_u16(I960_WORKRAM, 0x20b91c, 0),
+             (unsigned)i960_ld_u16(I960_WORKRAM, 0x20b91e, 0),
+             (unsigned)i960_ld_u16(I960_WORKRAM, 0x20b920, 0),
+             (unsigned)i960_ld_u16(I960_WORKRAM, 0x20b922, 0));
+    vita_startup_log(message);
+}
+#endif
+
 static u32 comm_attract_inner_2_texture_pick(u32 script_idx)
 {
     u32 course_variant;
@@ -148,8 +188,14 @@ void comm_attract_inner_2(u32 arg0, u32 arg1, u32 arg2)
     g2 = catalog_addr;
     g3 = 0;
     g4 = 1;
+#if defined(I960_HOST_VITA_GXM)
+    vita_rom_diagnostic("before splash catalog");
+#endif
     g0 = catalog_draw_setup((u32)g0, (u32)g1, (u32)g2);
     i960_st_u32(I960_WORKRAM, 0x20a7a4, 0, (u32)g0);
+#if defined(I960_HOST_VITA_GXM)
+    vita_splash_diagnostic(catalog_addr, (u32)g0);
+#endif
 
     /*
      * banks_clear wiped L2 (CREDIT). Catalog seed @ scene_alloc uses g4=4

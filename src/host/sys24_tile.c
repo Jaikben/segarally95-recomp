@@ -17,7 +17,7 @@ enum {
     SYS24_CHAR_RAM_WORDS    = 0x80000 / 2,
     SYS24_LAYER_TILES       = 64 * 64,
     SYS24_LAYER_COUNT       = 4,
-    SYS24_PEN_COUNT         = 2048,
+    SYS24_PEN_COUNT         = 256 * 16,
     /* emu/tilemap.h — flagsmap = LAYER0 | category (low 4 bits). */
     TILEMAP_PIXEL_LAYER0    = 0x10,
     TILEMAP_DRAW_OPAQUE     = 0x02

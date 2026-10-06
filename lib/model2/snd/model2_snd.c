@@ -334,10 +334,29 @@ static int thread_start(void)
     g_pkt_n = 0;
     g_uart_r = g_uart_w = g_uart_n = 0;
     g_pcm_r = g_pcm_n = 0;
+#if defined(I960_HOST_VITA)
+    {
+        pthread_attr_t attr;
+        int rc;
+
+        rc = pthread_attr_init(&attr);
+        if (rc == 0) {
+            rc = pthread_attr_setstacksize(&attr, 128u * 1024u);
+            if (rc == 0)
+                rc = pthread_create(&g_thr, &attr, board_thread, NULL);
+            pthread_attr_destroy(&attr);
+        }
+        if (rc != 0) {
+            fprintf(stderr, "lift: Vita sound thread setup failed: %d\n", rc);
+            return -1;
+        }
+    }
+#else
     if (pthread_create(&g_thr, NULL, board_thread, NULL) != 0) {
         fprintf(stderr, "lift: sound thread create failed\n");
         return -1;
     }
+#endif
     g_thr_on = 1;
     if (!atexit_registered) {
         atexit(snd_atexit_stop);

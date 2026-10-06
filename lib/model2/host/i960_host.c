@@ -6,6 +6,10 @@
 #include "model2_rom.h"
 #include "model2_snd.h"
 
+#if defined(I960_HOST_VITA_GXM)
+#include "vita/startup_log.h"
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -82,12 +86,27 @@ void i960_host_load_rom(void)
 
 void i960_host_reset(void)
 {
+#if defined(I960_HOST_VITA_GXM)
+    vita_startup_log("startup: resetting Model 2 hardware\n");
+#endif
     model2_hw_init_from_lift();
+#if defined(I960_HOST_VITA_GXM)
+    vita_startup_log("startup: Model 2 hardware ready; resetting sound board\n");
+#endif
     model2_snd_reset();
+#if defined(I960_HOST_VITA_GXM)
+    vita_startup_log("startup: sound board reset; loading sound ROMs and starting worker\n");
+#endif
     if (model2_snd_load_roms(NULL) != 0) {
+#if defined(I960_HOST_VITA_GXM)
+        vita_startup_log("startup: sound ROM load or worker startup failed\n");
+#endif
         fprintf(stderr, "lift: sound ROM load failed\n");
         exit(1);
     }
+#if defined(I960_HOST_VITA_GXM)
+    vita_startup_log("startup: sound worker ready; resetting I/O and registers\n");
+#endif
     model2_io_board_reset();
     zero_registers();
     /*

@@ -10,6 +10,7 @@
  */
 
 #include "model2_geo_gl.h"
+#include "model2_geo_order.h"
 #include "lift_log.h"
 
 #ifdef I960_HOST_HAVE_GL
@@ -253,74 +254,11 @@ static const model2_geo_tri_mat_t *g_sort_mats;
  * MAME model2_state::float_to_zval (model2_v.cpp) — z_adjust from GEO 0x08;
  * attract bootstrap does not emit 0x08, so adjust stays 0.
  */
-static unsigned float_to_zval(float floatval, u32 z_adjust)
-{
-    union {
-        float f;
-        u32 u;
-    } conv;
-    int32_t fpint;
-    int32_t exponent;
-    u32 mantissa;
-
-    conv.f = floatval;
-    fpint = (int32_t)conv.u;
-    exponent = ((fpint >> 23) & 0xff) - (int32_t)((z_adjust >> 23) & 0xffu);
-    mantissa = (u32)fpint & 0x7fffffu;
-    mantissa += 0x400u;
-    if (mantissa > 0x7fffffu) {
-        exponent++;
-        mantissa = (mantissa & 0x7fffffu) >> 1;
-    }
-    mantissa >>= 11;
-    if (fpint < 0)
-        return 0;
-    if (exponent < -12)
-        return 0;
-    if (exponent < 0)
-        return (mantissa | 0x1000u) >> (unsigned)(-exponent);
-    if (exponent < 15)
-        return ((unsigned)(exponent + 1) << 12) | mantissa;
-    return 0xffffu;
-}
-
-
 static int mat_order_cmp(const void *a, const void *b)
 {
     unsigned ia = *(const unsigned *)a;
     unsigned ib = *(const unsigned *)b;
-    const model2_geo_tri_mat_t *ma = &g_sort_mats[ia];
-    const model2_geo_tri_mat_t *mb = &g_sort_mats[ib];
-    unsigned za = float_to_zval(ma->z_sort, 0u);
-    unsigned zb = float_to_zval(mb->z_sort, 0u);
-    int ca = (ma->flags & MODEL2_GEO_TEX_CUTOUT) ? 1 : 0;
-    int cb = (mb->flags & MODEL2_GEO_TEX_CUTOUT) ? 1 : 0;
-    int ta = (ma->flags & MODEL2_GEO_TEX_TEXTURED) ? 1 : 0;
-    int tb = (mb->flags & MODEL2_GEO_TEX_TEXTURED) ? 1 : 0;
-    /* solid=0, opaque-tex=1, cutout=2 */
-    int ka = ta ? (ca ? 2 : 1) : 0;
-    int kb = tb ? (cb ? 2 : 1) : 0;
-
-    /* HUD tach needle after world so overlay depth-disable can punch the hole. */
-    if ((ma->pad & 1u) != (mb->pad & 1u))
-        return ((ma->pad & 1u) < (mb->pad & 1u)) ? -1 : 1;
-
-    if (ka != kb)
-        return (ka < kb) ? -1 : 1;
-
-    /*
-     * Nearer float_to_zval first. Attract eye-Z often saturates zval to 0xffff
-     * (far sky + cars in one bucket); then compare raw polygon_z so nearer
-     * car opaque-tex still sorts before far env sheets.
-     */
-    if (za != zb)
-        return (za < zb) ? -1 : 1;
-    if (za == 0xffffu && ma->z_sort != mb->z_sort)
-        return (ma->z_sort < mb->z_sort) ? -1 : 1;
-    /* Last-submitted first (MAME list prepend). */
-    if (ia != ib)
-        return (ia > ib) ? -1 : 1;
-    return 0;
+    return model2_geo_order_compare(&g_sort_mats[ia], ia, &g_sort_mats[ib], ib);
 }
 
 static int lut_cache_find(const model2_geo_tri_mat_t *m)

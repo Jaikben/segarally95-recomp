@@ -6,6 +6,9 @@
 #include "model2_rom.h"
 #include "i960_mem.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+
 /* convention: kind=leaf_ret  args g0,g1,g2  link g14 ret  callee r5 */
 /* abi: u32 arg0=g0, u32 arg1=g1, u32 arg2=g2 → void */
 /* call site: caller 0x328 */
@@ -23,12 +26,16 @@ void maincpu_reset_entry(u32 arg0, u32 arg1, u32 arg2)
     g6 = (uintptr_t)(model2_cpu_wait + 0x0);
     g8 = 0 - 1;
     do {
+        if (g6 >= (uintptr_t)(model2_cpu_wait + sizeof(model2_cpu_wait))) {
+            fprintf(stderr, "lift: boot wait table exceeds RAM without a 32-bit terminator\n");
+            exit(1);
+        }
         g4 = *(u32 *)g5;
         *(u32 *)g6 = (u32)g4;
         g5 = g5 + 4;
         g4 = *(u32 *)g5;
         g6 = g6 + 4;
-    } while ((unsigned char)g8 != g4);
+    } while ((u32)g8 != (u32)g4);
     g4 = i960_mmio_read_u8(0xf80000); /* boot_mmio_gap */;
     g7 = 0;
     g6 = (uintptr_t)(model2_crx_ram + 0x1e40);

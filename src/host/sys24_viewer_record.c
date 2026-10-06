@@ -72,7 +72,7 @@ static void *record_writer(void *arg)
 
 int sys24_viewer_record_start(const char *path, int width, int height, int fps)
 {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(I960_HOST_VITA)
     (void)path;
     (void)width;
     (void)height;
@@ -196,6 +196,8 @@ void sys24_viewer_record_stop(void)
     if (g_pipe) {
 #if defined(_WIN32)
         int rc = _pclose(g_pipe);
+#elif defined(I960_HOST_VITA)
+        int rc = 0;
 #else
         int rc = pclose(g_pipe);
 #endif

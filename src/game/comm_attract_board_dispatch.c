@@ -12,6 +12,10 @@
 
 #include <stdio.h>
 
+#if defined(I960_HOST_VITA_GXM)
+#include "vita/startup_log.h"
+#endif
+
 #define COMM_INNER_JUMP_TABLE  0x005AE480u
 
 static u32 comm_inner_handler_for_index(u32 index)
@@ -69,6 +73,10 @@ static void comm_attract_inner_tail(void)
     u32 wait;
     u32 handler;
     u32 frame;
+#if defined(I960_HOST_VITA_GXM)
+    static unsigned diagnostic_calls;
+    int diagnostic_due;
+#endif
 
     board_type = i960_ld_u32(I960_WORKRAM, 0x20a530, 0);
     inner = i960_ld_u32(I960_WORKRAM, 0x20209c, 0);
@@ -91,6 +99,18 @@ static void comm_attract_inner_tail(void)
 
     /* @0xFD50: jump table index is wait_key (may be forced to 11), not raw inner. */
     handler = comm_inner_handler_for_index(wait_key);
+#if defined(I960_HOST_VITA_GXM)
+    diagnostic_due = wait_key == 3u && diagnostic_calls < 3u;
+    if (diagnostic_due) {
+        char message[160];
+        diagnostic_calls++;
+        snprintf(message, sizeof(message),
+                 "runtime: attract inner3 handler=0x%08x scene_hook=0x%08x begin\n",
+                 (unsigned)handler,
+                 (unsigned)i960_ld_u32(I960_WORKRAM, 0x20a78c, 0));
+        vita_startup_log(message);
+    }
+#endif
     i960_st_u32(I960_WORKRAM, 0x20a784, 0, wait_key);
     i960_st_u32(I960_WORKRAM, 0x20209c, 0, wait_key);
 
@@ -100,6 +120,10 @@ static void comm_attract_inner_tail(void)
     } else {
         i960_st_u32(I960_WORKRAM, 0x20209c, 0, (u32)g14);
     }
+#if defined(I960_HOST_VITA_GXM)
+    if (diagnostic_due)
+        vita_startup_log("runtime: attract inner3 handler returned\n");
+#endif
 
     frame = i960_ld_u32(I960_WORKRAM, 0x20a808, 0);
     i960_st_u32(I960_WORKRAM, 0x20a808, 0, frame + 1u);
@@ -116,8 +140,20 @@ static void comm_attract_inner_tail(void)
         }
     }
 
+#if defined(I960_HOST_VITA_GXM)
+    if (diagnostic_due)
+        vita_startup_log("runtime: attract scene hook begin\n");
+#endif
     comm_attract_scene_hook();
+#if defined(I960_HOST_VITA_GXM)
+    if (diagnostic_due)
+        vita_startup_log("runtime: attract scene hook returned; board frame begin\n");
+#endif
     comm_attract_board_frame(0, 0, 0);
+#if defined(I960_HOST_VITA_GXM)
+    if (diagnostic_due)
+        vita_startup_log("runtime: attract board frame returned\n");
+#endif
 }
 
 void comm_attract_board_dispatch(u32 arg0, u32 arg1, u32 arg2)

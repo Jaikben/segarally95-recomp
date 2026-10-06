@@ -17,6 +17,10 @@ void model2_snd_host_audio_close(void);
 static SDL_AudioDeviceID g_dev;
 #endif
 static int g_open;
+#ifdef I960_HOST_VITA_GXM
+static int g_volume = 100;
+static int g_mute;
+#endif
 
 #ifdef I960_HOST_HAVE_SDL
 static void snd_audio_cb(void *userdata, Uint8 *stream, int len)
@@ -28,6 +32,15 @@ static void snd_audio_cb(void *userdata, Uint8 *stream, int len)
         return;
     frames = (unsigned)len / (unsigned)(2 * (int)sizeof(i16));
     model2_snd_render((signed short *)stream, frames);
+#ifdef I960_HOST_VITA_GXM
+    {
+        unsigned i;
+        signed short *samples = (signed short *)stream;
+        int gain = g_mute ? 0 : g_volume;
+        for (i = 0; i < frames * 2; ++i)
+            samples[i] = (signed short)((int)samples[i] * gain / 100);
+    }
+#endif
 }
 
 static void snd_audio_atexit(void)
@@ -90,3 +103,25 @@ void model2_snd_host_audio_close(void)
 #endif
     g_open = 0;
 }
+
+void model2_snd_host_audio_pause(int paused)
+{
+#ifdef I960_HOST_HAVE_SDL
+    if (g_dev)
+        SDL_PauseAudioDevice(g_dev, paused != 0);
+#else
+    (void)paused;
+#endif
+}
+
+#ifdef I960_HOST_VITA_GXM
+void model2_snd_host_audio_volume(int volume, int mute)
+{
+    if (g_dev)
+        SDL_LockAudioDevice(g_dev);
+    g_volume = volume;
+    g_mute = mute;
+    if (g_dev)
+        SDL_UnlockAudioDevice(g_dev);
+}
+#endif

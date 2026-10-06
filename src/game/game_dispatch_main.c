@@ -8,10 +8,35 @@
 #include "i960_host.h"
 #include "lift_syms.h"
 
+#if defined(I960_HOST_VITA_GXM)
+#include "vita/startup_log.h"
+#include "vita/rom_diagnostic.h"
+#include <stdio.h>
+
+static void vita_game_diagnostic(const char *phase, unsigned iteration)
+{
+    char message[256];
+    snprintf(message, sizeof(message),
+             "runtime: loop=%u %s mode=%u inner=%u boot_phase=%u countdown=%u country_gate=%u\n",
+             iteration, phase,
+             (unsigned)i960_ld_u32(I960_WORKRAM, 0x202098, 0),
+             (unsigned)i960_ld_u32(I960_WORKRAM, 0x20209c, 0),
+             (unsigned)i960_ld_u32(I960_WORKRAM, 0x20aa20, 0),
+             (unsigned)i960_ld_u32(I960_WORKRAM, 0x2021f4, 0),
+             (unsigned)i960_ld_u8(I960_WORKRAM, 0x202019, 0));
+    vita_startup_log(message);
+}
+#endif
+
 void game_dispatch_main(u32 arg0, u32 arg1, u32 arg2)
 {
     void *arg0_p = (void *)arg0;
     void *a2 = (void *)arg2;
+#if defined(I960_HOST_VITA_GXM)
+    unsigned diagnostic_iteration = 0, diagnostic_samples = 0;
+    u32 diagnostic_mode = ~0u, diagnostic_inner = ~0u, diagnostic_boot = ~0u;
+    int diagnostic_due;
+#endif
 
     (void)arg0_p;
     (void)a2;
@@ -24,6 +49,9 @@ void game_dispatch_main(u32 arg0, u32 arg1, u32 arg2)
     game_staging_init(0, 0, 0);
     game_subsys_init_stub(0, 0, 0);
     game_cold_boot_init(0, 0, 0);
+#if defined(I960_HOST_VITA_GXM)
+    vita_rom_diagnostic("after cold boot");
+#endif
     /* Host: present cold-boot splash once (HW draws via irq_init_major @ 0x26980). */
     if (i960_host_boot_screen()) {
         boot_tile_splash_frame(0, 0, 0);
@@ -43,6 +71,25 @@ void game_dispatch_main(u32 arg0, u32 arg1, u32 arg2)
     L_00003190:
         if (i960_host_dispatch_halted())
             return;
+#if defined(I960_HOST_VITA_GXM)
+        {
+            u32 mode = i960_ld_u32(I960_WORKRAM, 0x202098, 0);
+            u32 inner = i960_ld_u32(I960_WORKRAM, 0x20209c, 0);
+            u32 boot = i960_ld_u32(I960_WORKRAM, 0x20aa20, 0);
+            diagnostic_iteration++;
+            diagnostic_due = diagnostic_samples < 48u
+                && (mode != diagnostic_mode || inner != diagnostic_inner
+                    || boot != diagnostic_boot || diagnostic_iteration <= 3u
+                    || (diagnostic_iteration <= 1800u && diagnostic_iteration % 120u == 0));
+            diagnostic_mode = mode;
+            diagnostic_inner = inner;
+            diagnostic_boot = boot;
+            if (diagnostic_due) {
+                diagnostic_samples++;
+                vita_game_diagnostic("begin", diagnostic_iteration);
+            }
+        }
+#endif
         g4 = i960_ld_u32(I960_WORKRAM, 0x20a530, 0);
         /* lift: cmpibe 0, g4, 0x31fc @ 0x3198 */
         comm_board_dispatch(0, 0, 0);
@@ -73,9 +120,21 @@ void game_dispatch_main(u32 arg0, u32 arg1, u32 arg2)
         g4 = i960_ld_u32(I960_WORKRAM, 0x202098, 0);
         g4 = g4 & 15;
         g4 = i960_ld_u32(I960_WORKRAM, 0x5a2110, (u32)(g4 << 2));
+#if defined(I960_HOST_VITA_GXM)
+        if (diagnostic_due) {
+            char message[96];
+            snprintf(message, sizeof(message), "runtime: loop=%u calling mode handler=0x%08x\n",
+                     diagnostic_iteration, (unsigned)g4);
+            vita_startup_log(message);
+        }
+#endif
         /* lift: cmpibe 0, g4, 0x3220 @ 0x3214 */
         if (g4)
             i960_call_indirect(g4);
+#if defined(I960_HOST_VITA_GXM)
+        if (diagnostic_due)
+            vita_game_diagnostic("mode handler returned", diagnostic_iteration);
+#endif
         goto L_00003230;
         i960_st_u32(I960_WORKRAM, 0x202098, 0, (u32)g14);
         i960_st_u32(I960_WORKRAM, 0x20209c, 0, (u32)g14);
@@ -87,7 +146,15 @@ void game_dispatch_main(u32 arg0, u32 arg1, u32 arg2)
         g0 = 0 - 1;
         g1 = 0;
         texture_bank_select((u32)g0, (u32)g1, (u32)g2);
+#if defined(I960_HOST_VITA_GXM)
+        if (diagnostic_due)
+            vita_game_diagnostic("frame update finished; entering vsync", diagnostic_iteration);
+#endif
         game_mode_apply(0, 0, 0);
+#if defined(I960_HOST_VITA_GXM)
+        if (diagnostic_due)
+            vita_game_diagnostic("vsync returned", diagnostic_iteration);
+#endif
         geo_fifo_emit(0, 0);
         geo_fifo_preset(0, 0);
         i960_host_frame_present();

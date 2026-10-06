@@ -14,9 +14,16 @@
 #include "sys24_tile.h"
 #include "sys24_viewer_record.h"
 #include "model2_snd.h"
+#if defined(I960_HOST_VITA_GXM)
+#include "../vita/gxm_renderer.h"
+#include "../vita/controls.h"
+#include "../vita/frontend.h"
+#include <psp2/ctrl.h>
+#endif
 
 extern int model2_snd_host_audio_open(void);
 extern void model2_snd_host_audio_close(void);
+extern void model2_snd_host_audio_pause(int paused);
 
 #include <math.h>
 #include <stdio.h>
@@ -53,10 +60,14 @@ static u32 g_shot_script = 0xffffffffu;
 
 #ifdef I960_HOST_HAVE_SDL
 static SDL_Window *g_window;
+#if defined(I960_HOST_VITA_GXM)
+static vita_controls_t g_vita_controls = {0, 0, 1};
+static unsigned g_vita_save_tick;
+#endif
 #ifdef I960_HOST_HAVE_GL
 static SDL_GLContext g_gl;
 static GLuint g_tile_tex;
-#else
+#elif !defined(I960_HOST_VITA_GXM)
 static SDL_Renderer *g_renderer;
 static SDL_Texture *g_texture;
 #endif
@@ -315,20 +326,48 @@ int sys24_viewer_open(const char *title)
             "(install SDL2 dev package and rebuild)\n");
     return -1;
 #else
+#if defined(I960_HOST_VITA)
+    /* PS Vita has one fixed physical display; letterbox handles the rest. */
+    const int win_w = 960;
+    const int win_h = 544;
+#else
     const int win_h = SYS24_FB_HEIGHT * SYS24_VIEW_SCALE;
     const int win_w = model2_host_aspect_is_widescreen()
                           ? (int)((float)win_h * (16.f / 9.f) + 0.5f)
                           : (SYS24_FB_WIDTH * SYS24_VIEW_SCALE);
+#endif
     size_t fb_bytes;
 
     if (g_open)
         return 0;
 
+#if defined(I960_HOST_VITA_GXM)
+    if (SDL_Init(SDL_INIT_AUDIO | SDL_INIT_TIMER) != 0) {
+#else
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
+#endif
         fprintf(stderr, "lift: SDL_Init failed: %s\n", SDL_GetError());
         return -1;
     }
 
+#if defined(I960_HOST_VITA_GXM)
+    if (vita_gxm_open() != 0) {
+        SDL_Quit();
+        return -1;
+    }
+    g_open = 1;
+    g_vita_controls = (vita_controls_t){0, 0, 1};
+    g_paused = 0;
+    g_shifter = 0;
+    g_tile_valid = 0;
+    g_tile_tex_dirty = 0;
+    g_vita_save_tick = SDL_GetTicks();
+    if (model2_geo_init_from_lift() != 0) {
+        fprintf(stderr, "lift: native GXM geometry initialization failed\n");
+        sys24_viewer_shutdown();
+        return -1;
+    }
+#else
 #ifdef I960_HOST_HAVE_GL
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
@@ -411,6 +450,7 @@ int sys24_viewer_open(const char *title)
         return -1;
     }
 #endif
+#endif
 
     g_tile = sys24_tile_create(SYS24_TILE_MASK_M2);
     if (!g_tile) {
@@ -422,17 +462,27 @@ int sys24_viewer_open(const char *title)
     fb_bytes = (size_t)SYS24_FB_WIDTH * (size_t)SYS24_FB_HEIGHT * sizeof(u32);
     g_bitmap = (u32 *)malloc(fb_bytes);
     g_bitmap_pri = (u32 *)malloc(fb_bytes);
+#if !defined(I960_HOST_VITA_GXM)
     g_record_bgra = (u32 *)malloc(fb_bytes);
     if (!g_bitmap || !g_bitmap_pri || !g_record_bgra) {
+#else
+    if (!g_bitmap || !g_bitmap_pri) {
+#endif
         fprintf(stderr, "lift: live view framebuffer alloc failed\n");
         sys24_viewer_shutdown();
         return -1;
     }
 
     g_open = 1;
+#if !defined(I960_HOST_VITA_GXM)
     viewer_bring_to_front(g_window);
+#endif
     (void)model2_snd_host_audio_open();
     viewer_record_try_start_from_env();
+#if defined(I960_HOST_VITA_GXM)
+    lift_log("lift: native GXM composite %dx%d, Start+Select=pause, Select=coin Start=start Triangle=test Circle=service L/R=shift Cross=throttle Square=brake left-stick=steer\n",
+             win_w, win_h);
+#else
     lift_log(
             "lift: live view — %dx%d (scale %dx)%s, 5=coin 1=start F2=test/confirm 9/Down=menu F3=nvram, Space=pause, R=record, Esc=quit\n",
             SYS24_FB_WIDTH,
@@ -444,6 +494,7 @@ int sys24_viewer_open(const char *title)
             ""
 #endif
     );
+#endif
     return 0;
 #endif
 }
@@ -609,6 +660,9 @@ static void viewer_note_shot(void)
 
 static void viewer_update_title(void)
 {
+#if defined(I960_HOST_VITA_GXM)
+    return;
+#endif
     char title[224];
     u32 main_mode = i960_ld_u32(I960_WORKRAM, 0x202098, 0);
     u32 cam_mode = i960_ld_u32(I960_WORKRAM, 0x20a7f4, 0);
@@ -682,6 +736,71 @@ int sys24_viewer_poll_events(void)
         return 0;
 
 #ifndef I960_HOST_HAVE_SDL
+    return 0;
+#elif defined(I960_HOST_VITA_GXM)
+    SceCtrlData pad;
+    unsigned buttons = 0;
+    int in_test = (i960_ld_u32(I960_WORKRAM, 0x202098, 0) == 4u);
+    vita_actions_t action;
+    if (sceCtrlPeekBufferPositive(0, &pad, 1) <= 0) {
+        fprintf(stderr, "lift: native Vita controller read failed\n");
+        return 1;
+    }
+    buttons = vita_pad_buttons(pad.buttons);
+    action = vita_controls_update(&g_vita_controls, buttons);
+    if (action.pause_changed && g_vita_controls.paused)
+        vita_menu_open(&g_vita_menu);
+    if (g_vita_controls.paused) {
+        vita_menu_action_t menu = vita_menu_update(&g_vita_menu, action.pressed, 1);
+        if (menu.changed)
+            vita_frontend_apply(1);
+        if (menu.quit || menu.reset) {
+            int saved = model2_nvram_save(NULL);
+            int settings = vita_frontend_apply(1);
+            if (saved == 0 && settings == 0) {
+                g_vita_menu.restart = menu.reset;
+                return 1;
+            }
+            if (saved != 0)
+                vita_frontend_save_error();
+        }
+        if (menu.resume) {
+            g_vita_controls.paused = 0;
+            g_vita_controls.wait_release = 1;
+            action.pause_changed = 1;
+            action.test = menu.test;
+            action.service = menu.service;
+        }
+    }
+    g_paused = g_vita_controls.paused;
+    if (action.pause_changed)
+        model2_snd_host_audio_pause(g_paused);
+    if (action.pause_changed || SDL_GetTicks() - g_vita_save_tick >= 5000u) {
+        if (model2_nvram_save(NULL) != 0) {
+            fprintf(stderr, "lift: Vita periodic/pause NVRAM save failed\n");
+            vita_frontend_save_error();
+        }
+        g_vita_save_tick = SDL_GetTicks();
+    }
+    model2_io_in0_set_mask(MODEL2_IO_IN0_COIN1, (action.held & VITA_SELECT) != 0);
+    model2_io_in0_set_mask(MODEL2_IO_IN0_START1, (action.held & VITA_START) != 0);
+    model2_io_in0_set_mask(MODEL2_IO_IN0_TEST, action.test
+        || (action.held & VITA_TRIANGLE) || (in_test && (action.held & VITA_UP)));
+    model2_io_in0_set_mask(MODEL2_IO_IN0_SERVICE1, action.service
+        || (action.held & VITA_CIRCLE)
+        || (in_test && (action.held & (VITA_DOWN | VITA_LEFT | VITA_RIGHT))));
+    if (action.test || (!in_test && (action.pressed & VITA_TRIANGLE)))
+        model2_io_request_test_menu();
+    if ((action.pressed & VITA_L) && g_shifter > 0)
+        g_shifter--;
+    if ((action.pressed & VITA_R) && g_shifter < 4)
+        g_shifter++;
+    model2_io_shifter_set(g_shifter);
+    model2_io_analog_set(MODEL2_IO_AN_STEER,
+        g_vita_controls.wait_release || g_paused || in_test ? 0x80u
+            : vita_settings_steer(&g_vita_menu.settings, pad.lx));
+    model2_io_analog_set(MODEL2_IO_AN_ACCEL, (action.held & VITA_CROSS) ? 0xe0u : 0);
+    model2_io_analog_set(MODEL2_IO_AN_BRAKE, (action.held & VITA_SQUARE) ? 0xe0u : 0);
     return 0;
 #else
     SDL_Event ev;
@@ -1363,7 +1482,7 @@ int sys24_viewer_flip(const u8 *tile_map, const u8 *char_ram, const u8 *palram)
                                 s_pri_log++;
                             }
                         }
-#ifndef I960_HOST_HAVE_GL
+#if !defined(I960_HOST_HAVE_GL) && !defined(I960_HOST_VITA_GXM)
                         /* Software path has no geo: fold priority over bottom. */
                         if (g_bitmap_pri) {
                             size_t n = (size_t)SYS24_FB_WIDTH
@@ -1390,7 +1509,11 @@ int sys24_viewer_flip(const u8 *tile_map, const u8 *char_ram, const u8 *palram)
             }
         }
 
-#ifdef I960_HOST_HAVE_GL
+#if defined(I960_HOST_VITA_GXM)
+        if (vita_gxm_present(g_bitmap, g_bitmap_pri, opaque2d, g_tile_tex_dirty, g_paused) != 0)
+            return 1;
+        g_tile_tex_dirty = 0;
+#elif defined(I960_HOST_HAVE_GL)
         {
             int win_w = 0, win_h = 0;
             int dw = 0, dh = 0;
@@ -1503,7 +1626,14 @@ int sys24_viewer_flip(const u8 *tile_map, const u8 *char_ram, const u8 *palram)
         SDL_Delay(16);
         if (sys24_viewer_poll_events() != 0)
             return 1;
-#ifdef I960_HOST_HAVE_GL
+#if defined(I960_HOST_VITA_GXM)
+        {
+            u32 inner = i960_ld_u32(I960_WORKRAM, 0x20209c, 0);
+            u32 frame = i960_ld_u32(I960_WORKRAM, 0x20a808, 0);
+            if (vita_gxm_present(g_bitmap, g_bitmap_pri, viewer_tiles_opaque(inner, frame), 0, g_paused) != 0)
+                return 1;
+        }
+#elif defined(I960_HOST_HAVE_GL)
         SDL_GL_SwapWindow(g_window);
 #else
         SDL_RenderClear(g_renderer);
@@ -1538,7 +1668,9 @@ void sys24_viewer_shutdown(void)
     (void)model2_nvram_save(NULL);
     sys24_viewer_record_stop();
 #ifdef I960_HOST_HAVE_SDL
-#ifdef I960_HOST_HAVE_GL
+#if defined(I960_HOST_VITA_GXM)
+    vita_gxm_shutdown();
+#elif defined(I960_HOST_HAVE_GL)
     if (g_tile_tex) {
         glDeleteTextures(1, &g_tile_tex);
         g_tile_tex = 0;

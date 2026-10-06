@@ -2,6 +2,11 @@
 #include "lift_log.h"
 #include "i960_mem.h"
 #include "model2_rom_dir.h"
+#include "model2_rom_interleave.h"
+
+#if defined(I960_HOST_VITA_GXM)
+#include "vita/startup_log.h"
+#endif
 
 #include <errno.h>
 #include <stdio.h>
@@ -18,6 +23,15 @@
 
 /* Extracted main_data is three ROM_LOAD32_WORD pairs (12 MiB). */
 #define MODEL2_ROM_EXTRACT_MAIN_DATA_SIZE 0x00C00000u
+
+static const char *const maincpu_pairs[][2] = {
+    { "epr-17888b.12", "epr-17889b.13" },
+};
+static const char *const main_data_pairs[][2] = {
+    { "mpr-17746.10", "mpr-17747.11" },
+    { "mpr-17744.8", "mpr-17745.9" },
+    { "mpr-17884.6", "mpr-17885.7" },
+};
 
 /* MAME main_data mirror: 0x06000000 maps region+0x01000000 for 16 MiB. */
 #define MAIN_DATA_MIRROR_SIZE 0x01000000u
@@ -672,6 +686,78 @@ static int model2_rom_file_ok(const char *path, u32 expect_size)
     return (u32)st.st_size == expect_size;
 }
 
+static int model2_rom_image_matches(const char *path,
+                                    const char *const pairs[][2], unsigned count)
+{
+    const char *rom_dir = model2_resolve_rom_dir();
+    FILE *image = fopen(path, "rb");
+    unsigned i;
+    int result = 1;
+
+    if (!image) {
+        fprintf(stderr, "lift: ROM cache open failed: %s: %s\n", path, strerror(errno));
+        return -1;
+    }
+    for (i = 0; i < count && result == 1; i++) {
+        char low_path[768], high_path[768];
+        FILE *low, *high;
+        int low_closed, high_closed;
+        int low_len = snprintf(low_path, sizeof(low_path), "%s/%s", rom_dir, pairs[i][0]);
+        int high_len = snprintf(high_path, sizeof(high_path), "%s/%s", rom_dir, pairs[i][1]);
+        if (low_len < 0 || (size_t)low_len >= sizeof(low_path)
+            || high_len < 0 || (size_t)high_len >= sizeof(high_path)) {
+            fprintf(stderr, "lift: ROM cache comparison path too long\n");
+            result = -1;
+            break;
+        }
+        low = fopen(low_path, "rb");
+        high = fopen(high_path, "rb");
+        if (!low || !high) {
+            fprintf(stderr, "lift: ROM cache comparison could not open %s / %s\n",
+                    low_path, high_path);
+            if (low)
+                fclose(low);
+            if (high)
+                fclose(high);
+            result = -1;
+            break;
+        }
+        result = model2_rom_interleave_matches(image, low, high);
+        low_closed = fclose(low);
+        high_closed = fclose(high);
+        if (low_closed != 0 || high_closed != 0) {
+            fprintf(stderr, "lift: ROM cache comparison: board ROM close failed\n");
+            result = -1;
+        }
+        if (result == 0)
+            fprintf(stderr, "lift: ROM cache bytes mismatch: %s (%s + %s)\n",
+                    path, pairs[i][0], pairs[i][1]);
+    }
+    if (result == 1) {
+        int extra = fgetc(image);
+        if (ferror(image)) {
+            fprintf(stderr, "lift: ROM cache comparison: image read failed: %s\n", path);
+            result = -1;
+        } else if (extra != EOF) {
+            fprintf(stderr, "lift: ROM cache has trailing data: %s\n", path);
+            result = 0;
+        }
+    }
+    if (fclose(image) != 0) {
+        fprintf(stderr, "lift: ROM cache comparison: image close failed: %s\n", path);
+        result = -1;
+    }
+    return result;
+}
+
+static int model2_rom_images_match(const char *maincpu_path, const char *main_data_path)
+{
+    int result = model2_rom_image_matches(maincpu_path, maincpu_pairs, 1u);
+    if (result != 1)
+        return result;
+    return model2_rom_image_matches(main_data_path, main_data_pairs, 3u);
+}
+
 static int model2_rom_write_file(const char *path, const u8 *data, size_t len)
 {
     FILE *fp;
@@ -705,7 +791,10 @@ static int model2_rom_write_file(const char *path, const u8 *data, size_t len)
         fclose(fp);
         return -1;
     }
-    fclose(fp);
+    if (fclose(fp) != 0) {
+        fprintf(stderr, "lift: extracted ROM close failed: %s: %s\n", path, strerror(errno));
+        return -1;
+    }
     return 0;
 }
 
@@ -713,11 +802,6 @@ static int model2_rom_write_file(const char *path, const u8 *data, size_t len)
 static int model2_rom_extract_blocks(const char *maincpu_path,
                                      const char *main_data_path)
 {
-    static const char *const main_data_pairs[][2] = {
-        { "mpr-17746.10", "mpr-17747.11" },
-        { "mpr-17744.8", "mpr-17745.9" },
-        { "mpr-17884.6", "mpr-17885.7" },
-    };
     const char *rom_dir = model2_resolve_rom_dir();
     u8 *maincpu = NULL;
     u8 *main_data = NULL;
@@ -733,7 +817,7 @@ static int model2_rom_extract_blocks(const char *maincpu_path,
         goto out;
     }
 
-    if (load32_word_interleave(rom_dir, "epr-17888b.12", "epr-17889b.13",
+    if (load32_word_interleave(rom_dir, maincpu_pairs[0][0], maincpu_pairs[0][1],
                                maincpu, MAINCPU_SIZE, &maincpu_len) != 0
         || maincpu_len != MAINCPU_SIZE) {
         fprintf(stderr,
@@ -783,6 +867,7 @@ int model2_rom_load_default(void)
 {
     char maincpu_path[768];
     char main_data_path[768];
+    int match = 0, loaded;
 
     if (model2_rom_resolve_path(maincpu_path, sizeof(maincpu_path),
                                 MODEL2_ROM_DEFAULT_MAINCPU) != 0
@@ -790,13 +875,36 @@ int model2_rom_load_default(void)
                                    MODEL2_ROM_DEFAULT_MAIN_DATA) != 0)
         return -1;
 
-    if (!model2_rom_file_ok(maincpu_path, MAINCPU_SIZE)
-        || !model2_rom_file_ok(main_data_path, MODEL2_ROM_EXTRACT_MAIN_DATA_SIZE)) {
+#if defined(I960_HOST_VITA_GXM)
+    vita_startup_log("startup: verifying extracted ROM caches against board dumps\n");
+#endif
+    if (model2_rom_file_ok(maincpu_path, MAINCPU_SIZE)
+        && model2_rom_file_ok(main_data_path, MODEL2_ROM_EXTRACT_MAIN_DATA_SIZE))
+        match = model2_rom_images_match(maincpu_path, main_data_path);
+    if (match < 0)
+        return -1;
+    if (match == 0) {
+        fprintf(stderr, "lift: missing or mismatched ROM caches; regenerating from board dumps\n");
+#if defined(I960_HOST_VITA_GXM)
+        vita_startup_log("startup: ROM caches missing or mismatched; regenerating\n");
+#endif
         if (model2_rom_extract_blocks(maincpu_path, main_data_path) != 0)
             return -1;
+        if (model2_rom_images_match(maincpu_path, main_data_path) != 1) {
+            fprintf(stderr, "lift: regenerated ROM caches failed content verification\n");
+            return -1;
+        }
     }
 
-    return model2_rom_load(maincpu_path, main_data_path);
+#if defined(I960_HOST_VITA_GXM)
+    vita_startup_log("startup: ROM cache contents verified; loading images\n");
+#endif
+    loaded = model2_rom_load(maincpu_path, main_data_path);
+#if defined(I960_HOST_VITA_GXM)
+    vita_startup_log(loaded == 0 ? "startup: verified ROM images loaded\n"
+                                : "startup: verified ROM image load failed\n");
+#endif
+    return loaded;
 }
 
 const u8 *model2_palram_ptr(void)

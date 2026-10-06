@@ -13,6 +13,19 @@
 
 #include <stdio.h>
 
+#if defined(I960_HOST_VITA_GXM)
+#include "vita/startup_log.h"
+static unsigned s_vita_inner3_calls;
+static int s_vita_inner3_diagnostic;
+static void vita_inner3_log(const char *message)
+{
+    if (s_vita_inner3_diagnostic)
+        vita_startup_log(message);
+}
+#else
+#define vita_inner3_log(message) ((void)0)
+#endif
+
 #define ATTRACT_STR_DESERT_A   0x0203e420u
 #define ATTRACT_STR_DESERT_B   0x0201f410u
 #define ATTRACT_STR_COURSE_A   0x000a0bfcu
@@ -26,7 +39,9 @@ static void attract_tile_string_draw(u32 dest_fp_off, u32 str_vaddr, u32 link)
             dest_fp_off, str_vaddr, link);
     comm_attract_script_frame_bind_fp();
     g3 = ATTRACT_TILE_SCALE;
+    vita_inner3_log("runtime: inner3 string draw begin\n");
     tile_attract_string_draw((void *)(fp + dest_fp_off), str_vaddr, link);
+    vita_inner3_log("runtime: inner3 string draw returned\n");
     lift_log( "lift: string_draw done\n");
 }
 
@@ -73,13 +88,17 @@ static void comm_attract_inner_3_desert_pen_rewrite(void)
 static void comm_attract_inner_3_script_finish_pair(void)
 {
     comm_attract_script_frame_bind_fp();
+    vita_inner3_log("runtime: inner3 pair geometry finish begin\n");
     comm_attract_geo_script_finish((void *)(fp + 0x40), (void *)(fp + 0xa0), 0);
+    vita_inner3_log("runtime: inner3 pair geometry finish returned\n");
 }
 
 static void comm_attract_inner_3_script_finish_banner(void)
 {
     comm_attract_script_frame_bind_fp();
+    vita_inner3_log("runtime: inner3 banner geometry finish begin\n");
     comm_attract_geo_script_finish((void *)(fp + 0x40), NULL, 0);
+    vita_inner3_log("runtime: inner3 banner geometry finish returned\n");
 }
 
 static void comm_attract_inner_3_draw_banner(void)
@@ -102,7 +121,9 @@ static void comm_attract_inner_3_draw_banner_same(void)
     link = i960_ld_u32(I960_WORKRAM, 0x20a7fc, 0);
     attract_tile_string_draw(0x40, ATTRACT_STR_BANNER, link);
     comm_attract_script_frame_bind_fp();
+    vita_inner3_log("runtime: inner3 same-object geometry finish begin\n");
     comm_attract_geo_script_finish((void *)(fp + 0x40), (void *)(fp + 0x40), 0);
+    vita_inner3_log("runtime: inner3 same-object geometry finish returned\n");
 }
 
 static void comm_attract_inner_3_desert_pair(void)
@@ -271,17 +292,25 @@ void comm_attract_inner_3(u32 arg0, u32 arg1, u32 arg2)
     (void)arg1;
     (void)arg2;
 
+#if defined(I960_HOST_VITA_GXM)
+    s_vita_inner3_diagnostic = s_vita_inner3_calls < 3u;
+    if (s_vita_inner3_diagnostic)
+        s_vita_inner3_calls++;
+#endif
+    vita_inner3_log("runtime: inner3 entered; binding frame and scanning slot\n");
     lift_log( "lift: inner3 enter\n");
 
     /* @0x10944 */
     comm_attract_script_frame_bind_fp();
     if (comm_attract_slot_scan(0, 0, 0) == 0)
         return;
+    vita_inner3_log("runtime: inner3 slot ready; board comm call begin\n");
 
     lift_log( "lift: inner3 after slot_scan\n");
 
     /* @0x10950 — board comm update (unlifted). */
     i960_call_rom(0xd9d0);
+    vita_inner3_log("runtime: inner3 board comm returned\n");
 
     /* @0x10954–0x1097C */
     frame = i960_ld_u32(I960_WORKRAM, 0x20a808, 0);
@@ -295,6 +324,7 @@ void comm_attract_inner_3(u32 arg0, u32 arg1, u32 arg2)
 
     /* @0x10980 */
     comm_attract_carousel_advance(0, 0, 0);
+    vita_inner3_log("runtime: inner3 carousel advanced\n");
 
     /*
      * @0x1098C: cmpible 0,g4 → branch (skip) when 0 <= link.
@@ -338,13 +368,17 @@ void comm_attract_inner_3(u32 arg0, u32 arg1, u32 arg2)
 
     /* @0x10A3C–0x10A40 */
     lift_log( "lift: inner3 before geo_fifo + script\n");
+    vita_inner3_log("runtime: inner3 GEO bootstrap begin\n");
     geo_fifo_bootstrap(0, 0, 0);
+    vita_inner3_log("runtime: inner3 GEO bootstrap returned; script frame setup begin\n");
     lift_log( "lift: inner3 after geo_fifo\n");
     lift_log( "lift: inner3 before script_frame_setup\n");
     comm_attract_script_frame_setup(0, 0, 0);
+    vita_inner3_log("runtime: inner3 script frame setup returned; script dispatch begin\n");
     lift_log( "lift: inner3 after script_frame_setup\n");
     lift_log( "lift: inner3 before script_dispatch script=%u\n",
             (unsigned)i960_ld_u32(I960_WORKRAM, 0x20a7c4, 0));
     comm_attract_inner_3_script_dispatch();
+    vita_inner3_log("runtime: inner3 script dispatch returned\n");
     lift_log( "lift: inner3 done\n");
 }

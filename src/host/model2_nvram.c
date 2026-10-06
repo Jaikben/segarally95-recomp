@@ -405,7 +405,17 @@ int model2_nvram_save(const char *path)
             fputc('\n', fp);
     }
 
-    fclose(fp);
+    {
+        int failed = ferror(fp);
+        if (fflush(fp) != 0)
+            failed = 1;
+        if (fclose(fp) != 0)
+            failed = 1;
+        if (failed) {
+            fprintf(stderr, "lift: nvram write failed: %s\n", path);
+            return -1;
+        }
+    }
     g_nvram.loaded = 1;
     g_nvram.have_settings = 1;
     g_nvram.dirty = 0;

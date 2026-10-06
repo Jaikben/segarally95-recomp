@@ -969,7 +969,23 @@ int model2_geo_render_init(void)
     g_worker_kick = 0;
     g_worker_gen = 0;
     g_done_gen = 0;
+#if defined(I960_HOST_VITA)
+    pthread_attr_t geo_worker_attr;
+    int geo_worker_rc;
+
+    geo_worker_rc = pthread_attr_init(&geo_worker_attr);
+    if (geo_worker_rc == 0) {
+        geo_worker_rc = pthread_attr_setstacksize(&geo_worker_attr, 256u * 1024u);
+        if (geo_worker_rc == 0)
+            geo_worker_rc = pthread_create(&g_worker, &geo_worker_attr, geo_worker_main, NULL);
+        pthread_attr_destroy(&geo_worker_attr);
+    }
+    if (geo_worker_rc != 0)
+        fprintf(stderr, "lift: Vita geo worker setup failed: %d\n", geo_worker_rc);
+    if (geo_worker_rc == 0) {
+#else
     if (pthread_create(&g_worker, NULL, geo_worker_main, NULL) == 0) {
+#endif
         g_worker_started = 1;
         if (g_fifo_valid && g_fifo.set_notify)
             g_fifo.set_notify(geo_fifo_notify);

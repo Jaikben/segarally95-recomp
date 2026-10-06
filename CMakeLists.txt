@@ -20,11 +20,36 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL ${CMAKE_BINARY_DIR})
 include(CheckIncludeFile)
 include(CheckSymbolExists)
 
+# --- PS Vita (VitaSDK) cross-compile -----------------------------------
+# Configure with: -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake
+# The toolchain file sets VITA/BUILD_VITA to True.
+if(VITA)
+  include("${VITASDK}/share/vita.cmake" REQUIRED)
+  if(DEFINED SEGAMOD2_VITA_GXM AND NOT SEGAMOD2_VITA_GXM)
+    message(FATAL_ERROR "Vita GL support was removed. Remove the obsolete SEGAMOD2_VITA_GXM option.")
+  endif()
+  unset(SEGAMOD2_VITA_GXM CACHE)
+  find_path(SEGAMOD2_VITA2D_INCLUDE_DIR vita2d.h)
+  find_library(SEGAMOD2_VITA2D_LIBRARY vita2d)
+  if(NOT SEGAMOD2_VITA2D_INCLUDE_DIR OR NOT SEGAMOD2_VITA2D_LIBRARY)
+    message(FATAL_ERROR "Native GXM needs libvita2d: vdpm install libvita2d")
+  endif()
+endif()
+
 # --- Optional deps (viewer / PNG dumps) ------------------------------------
 set(SEGAMOD2_HAVE_SDL2 OFF)
 set(SEGAMOD2_SDL_TARGET "")
 
-find_package(SDL2 CONFIG QUIET)
+if(VITA)
+  find_package(SDL2 CONFIG REQUIRED
+    PATHS "${VITASDK}/arm-vita-eabi/lib/cmake/SDL2" NO_DEFAULT_PATH)
+  file(READ "${VITASDK}/arm-vita-eabi/lib/pkgconfig/sdl2.pc" SEGAMOD2_VITA_SDL_PC)
+  if(SEGAMOD2_VITA_SDL_PC MATCHES "-lvitaGL")
+    message(FATAL_ERROR "GXM-only Vita builds require ordinary sdl2, not sdl2_vitagl. Install: vdpm install sdl2")
+  endif()
+else()
+  find_package(SDL2 CONFIG QUIET)
+endif()
 if(SDL2_FOUND)
   if(TARGET SDL2::SDL2)
     set(SEGAMOD2_SDL_TARGET SDL2::SDL2)
@@ -61,7 +86,9 @@ if(NOT SEGAMOD2_HAVE_SDL2)
 endif()
 
 find_package(PNG QUIET)
-find_package(OpenGL QUIET)
+if(NOT VITA)
+  find_package(OpenGL QUIET)
+endif()
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 
@@ -79,6 +106,9 @@ endif()
 if(APPLE AND SEGAMOD2_HAVE_SDL2)
   set(SEGAMOD2_HAVE_GL ON)
 endif()
+if(VITA)
+  set(SEGAMOD2_HAVE_GL OFF)
+endif()
 
 set(HAVE_PTHREAD_H OFF)
 set(HAVE_CLOCK_GETTIME OFF)
@@ -94,6 +124,12 @@ endif()
 
 # --- Common flags / includes ------------------------------------------------
 add_library(segamod2_common INTERFACE)
+if(VITA)
+  target_compile_definitions(segamod2_common INTERFACE I960_HOST_VITA I960_HOST_VITA_GXM)
+  target_include_directories(segamod2_common INTERFACE ${SEGAMOD2_VITA2D_INCLUDE_DIR})
+  target_link_libraries(segamod2_common INTERFACE
+    ${SEGAMOD2_VITA2D_LIBRARY} jpeg)
+endif()
 target_include_directories(segamod2_common INTERFACE
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/include
@@ -137,6 +173,14 @@ if(SEGAMOD2_HAVE_SDL2)
   target_compile_definitions(segamod2_common INTERFACE
     I960_HOST_HAVE_SDL SDL_MAIN_HANDLED)
   target_link_libraries(segamod2_common INTERFACE ${SEGAMOD2_SDL_TARGET})
+  if(VITA)
+    # Static SDK stubs must follow SDL2.
+    target_link_libraries(segamod2_common INTERFACE
+      SceIme_stub SceGxm_stub SceDisplay_stub
+      SceCtrl_stub SceAppMgr_stub SceAppUtil_stub SceAudio_stub SceAudioIn_stub
+      SceSysmodule_stub SceIofilemgr_stub SceCommonDialog_stub SceTouch_stub
+      SceHid_stub SceMotion_stub ScePower_stub SceProcessmgr_stub)
+  endif()
 endif()
 if(SEGAMOD2_HAVE_GL)
   target_compile_definitions(segamod2_common INTERFACE I960_HOST_HAVE_GL)
@@ -160,7 +204,7 @@ if(PNG_FOUND)
   target_compile_definitions(segamod2_common INTERFACE I960_HOST_HAVE_PNG)
   target_link_libraries(segamod2_common INTERFACE PNG::PNG)
 endif()
-if(UNIX)
+if(UNIX OR VITA)
   target_link_libraries(segamod2_common INTERFACE m)
 endif()
 target_link_libraries(segamod2_common INTERFACE Threads::Threads)
@@ -196,6 +240,7 @@ set(LIFT_HOST_RUNTIME
   lib/model2/host/i960_mem.c
   lib/model2/host/model2_rom.c
   lib/model2/host/model2_rom_check.c
+  lib/model2/host/model2_rom_interleave.c
   lib/model2/host/i960_host.c
   lib/model2/host/i960_host_scene.c
   lib/model2/host/i960_host_staging.c
@@ -208,6 +253,10 @@ set(LIFT_GAME_GLUE
   src/i960_host_invoke.c
   src/lift_main.c
 )
+if(VITA)
+  list(REMOVE_ITEM LIFT_GAME_GLUE src/lift_main.c)
+  list(APPEND LIFT_GAME_GLUE src/vita/main.c)
+endif()
 file(GLOB LIFT_GAME CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/game/*.c)
 file(GLOB LIFT_HOST CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/host/*.c)
 file(GLOB LIFT_LIBC CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/libc/*.c)
@@ -225,6 +274,69 @@ add_executable(segamod2
 )
 target_link_libraries(segamod2 PRIVATE
   model2_geo model2_hw model2_tgp model2_snd host_compat)
+if(VITA)
+  target_sources(segamod2 PRIVATE src/vita/gxm_renderer.c src/vita/menu.c src/vita/frontend.c)
+  target_link_options(segamod2 PRIVATE
+    "LINKER:-T,${CMAKE_CURRENT_SOURCE_DIR}/src/vita/sce_padding.ld")
+  set_property(TARGET segamod2 APPEND PROPERTY LINK_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/vita/sce_padding.ld")
+endif()
+
+option(SEGAMOD2_BUILD_VITA_TESTS "Build ROM-free Vita helper tests on the host" OFF)
+if(SEGAMOD2_BUILD_VITA_TESTS)
+  if(VITA)
+    message(FATAL_ERROR "Vita helper tests must run in a desktop build directory")
+  endif()
+  enable_testing()
+  add_executable(segamod2_vita_tests
+    tests/vita_helpers_test.c src/vita/menu.c lib/model2/geo/model2_geo_order.c)
+  target_include_directories(segamod2_vita_tests PRIVATE
+    src/vita lib/model2/geo/include lib/model2/include)
+  if(UNIX)
+    target_link_libraries(segamod2_vita_tests PRIVATE m)
+  endif()
+  add_test(NAME vita-helpers COMMAND segamod2_vita_tests)
+  add_executable(segamod2_rom_cache_tests
+    tests/rom_cache_test.c lib/model2/host/model2_rom_interleave.c)
+  target_include_directories(segamod2_rom_cache_tests PRIVATE lib/model2/host)
+  add_test(NAME vita-rom-cache COMMAND segamod2_rom_cache_tests)
+  add_executable(segamod2_boot_reset_tests tests/boot_reset_test.c
+    src/boot/maincpu_reset_entry.c lib/model2/host/i960_regs.c)
+  target_include_directories(segamod2_boot_reset_tests PRIVATE
+    lib/model2/include lib/model2/host)
+  add_test(NAME vita-boot-reset COMMAND segamod2_boot_reset_tests)
+  add_executable(segamod2_sys24_tile_tests tests/sys24_tile_test.c
+    src/host/sys24_tile.c src/host/sys24_gfx.c)
+  target_include_directories(segamod2_sys24_tile_tests PRIVATE include lib/model2/host)
+  add_test(NAME vita-tile-compositor COMMAND segamod2_sys24_tile_tests)
+  add_executable(segamod2_vita_menu_tests tests/vita_menu_test.c src/vita/menu.c)
+  target_include_directories(segamod2_vita_menu_tests PRIVATE src/vita)
+  add_test(NAME vita-menu COMMAND segamod2_vita_menu_tests
+    "${CMAKE_CURRENT_BINARY_DIR}/vita-settings-test.cfg")
+  add_executable(segamod2_vita_gxm_tests tests/vita_gxm_test.c
+    src/vita/gxm_renderer.c src/vita/menu.c lib/model2/geo/model2_geo_order.c)
+  target_include_directories(segamod2_vita_gxm_tests PRIVATE
+    tests/vita_shim src/vita include lib/model2/geo/include lib/model2/include lib/model2/host)
+  if(UNIX)
+    target_link_libraries(segamod2_vita_gxm_tests PRIVATE m)
+  endif()
+  add_test(NAME vita-gxm COMMAND segamod2_vita_gxm_tests)
+endif()
+
+# --- PS Vita packaging (.self / .vpk) ---------------------------------------
+if(VITA)
+  vita_create_self(segamod2.self segamod2 UNSAFE)
+  vita_create_vpk(segamod2.vpk "SEGARALY1" segamod2.self
+    VERSION "01.00"
+    NAME "Sega Rally Championship")
+  # vita_create_vpk/vita_create_self name their real (ALL, auto-building)
+  # target "<file>-vpk"/"<file>-self" on CMake >= 3.20; alias a stable name.
+  if(CMAKE_VERSION VERSION_LESS "3.20.0")
+    add_custom_target(lift-vpk DEPENDS segamod2.vpk)
+  else()
+    add_custom_target(lift-vpk DEPENDS segamod2.vpk-vpk)
+  endif()
+endif()
 
 # --- ROM extract ------------------------------------------------------------
 if(DEFINED ENV{SEGAMOD2_ROM_DIR} AND NOT "$ENV{SEGAMOD2_ROM_DIR}" STREQUAL "")
@@ -257,37 +369,44 @@ else()
 endif()
 
 add_custom_target(lift-check DEPENDS segamod2)
-# Host auto-extracts out/i960 bins on first run; rom-blocks is optional (Python).
-add_custom_target(lift DEPENDS segamod2)
+if(VITA)
+  # Cross-compiled ARM .self/.vpk cannot run on the build host.
+  add_custom_target(lift DEPENDS lift-vpk)
+else()
+  # Host auto-extracts out/i960 bins on first run; rom-blocks is optional (Python).
+  add_custom_target(lift DEPENDS segamod2)
 
-function(segamod2_run_target name)
-  set(extra_args ${ARGN})
-  add_custom_target(${name}
+  function(segamod2_run_target name)
+    set(extra_args ${ARGN})
+    add_custom_target(${name}
+      COMMAND ${CMAKE_COMMAND} -E env
+              SEGAMOD2_ROOT=${CMAKE_SOURCE_DIR}
+              SEGAMOD2_ROM_DIR=${SEGAMOD2_ROM_DIR}
+              $<TARGET_FILE:segamod2> ${extra_args}
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      DEPENDS segamod2
+      USES_TERMINAL
+    )
+  endfunction()
+
+  segamod2_run_target(lift-boot-viewer)
+  segamod2_run_target(lift-boot-practice --practice)
+  segamod2_run_target(lift-boot-headless --headless)
+  add_custom_target(lift-boot-live DEPENDS lift-boot-viewer)
+endif()
+
+if(NOT VITA)
+  add_custom_target(lift-cgm-decode
     COMMAND ${CMAKE_COMMAND} -E env
             SEGAMOD2_ROOT=${CMAKE_SOURCE_DIR}
             SEGAMOD2_ROM_DIR=${SEGAMOD2_ROM_DIR}
-            $<TARGET_FILE:segamod2> ${extra_args}
+            $<TARGET_FILE:segamod2> --decode-cgm 0x2879db0
+            --palette-dump ${CMAKE_BINARY_DIR}/lift/cgm_decode
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     DEPENDS segamod2
     USES_TERMINAL
   )
-endfunction()
-
-segamod2_run_target(lift-boot-viewer)
-segamod2_run_target(lift-boot-practice --practice)
-segamod2_run_target(lift-boot-headless --headless)
-add_custom_target(lift-boot-live DEPENDS lift-boot-viewer)
-
-add_custom_target(lift-cgm-decode
-  COMMAND ${CMAKE_COMMAND} -E env
-          SEGAMOD2_ROOT=${CMAKE_SOURCE_DIR}
-          SEGAMOD2_ROM_DIR=${SEGAMOD2_ROM_DIR}
-          $<TARGET_FILE:segamod2> --decode-cgm 0x2879db0
-          --palette-dump ${CMAKE_BINARY_DIR}/lift/cgm_decode
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  DEPENDS segamod2
-  USES_TERMINAL
-)
+endif()
 
 add_custom_target(lift-main
   COMMAND ${CMAKE_COMMAND} -E echo
