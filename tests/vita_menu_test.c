@@ -36,9 +36,13 @@ static void test_menu(void)
     a = vita_menu_update(&m, VITA_RIGHT, 1);
     CHECK(a.changed && m.settings.cpu == 444);
     vita_menu_update(&m, VITA_RIGHT, 1);
+    CHECK(m.settings.cpu == 500);
+    vita_menu_label(&m, 0, 1, text, sizeof(text));
+    CHECK(!strcmp(text, "CPU CLOCK: 500 MHz"));
+    vita_menu_update(&m, VITA_RIGHT, 1);
     CHECK(m.settings.cpu == 111);
     vita_menu_update(&m, VITA_LEFT, 1);
-    CHECK(m.settings.cpu == 444);
+    CHECK(m.settings.cpu == 500);
     m.selection = 1;
     vita_menu_update(&m, VITA_LEFT, 1);
     CHECK(m.settings.gpu == 77);
@@ -114,7 +118,7 @@ static void test_settings(const char *path)
     FILE *f;
     CHECK(vita_settings_load(&s, path) == 0);
     CHECK(s.cpu == 333);
-    s.cpu = 444; s.gpu = 166; s.volume = 30;
+    s.cpu = 500; s.gpu = 166; s.volume = 30;
     s.mute = s.invert = 1; s.deadzone = 25;
     CHECK(vita_settings_save(&s, path) == 0);
     CHECK(vita_settings_load(&loaded, path) == 0);
@@ -133,7 +137,7 @@ static void test_settings(const char *path)
     CHECK(remove(backup) == 0);
     s.cpu = 999;
     CHECK(vita_settings_save(&s, path) == -1);
-    CHECK(vita_settings_load(&loaded, path) == 0 && loaded.cpu == 444);
+    CHECK(vita_settings_load(&loaded, path) == 0 && loaded.cpu == 500);
     f = fopen(path, "w");
     CHECK(f && fputs("cpu_clock=999\n", f) >= 0 && fclose(f) == 0);
     CHECK(vita_settings_load(&loaded, path) == -1 && loaded.cpu == 333);

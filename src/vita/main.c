@@ -194,6 +194,9 @@ int main(void)
     vita_startup_log("startup: runtime diagnostic build " __DATE__ " " __TIME__ "\n");
     vita_startup_log("startup: boot wait-table terminator fix enabled\n");
     vita_startup_log("startup: incremental tile cache and stack stability fixes enabled\n");
+    vita_startup_log("startup: hashed GXM caches, ordered batches and bounded texture arena enabled\n");
+    vita_startup_log("startup: Daytona-style perspective lattice and solid checker mask enabled\n");
+    vita_startup_log("startup: stable radix painter order and visible-polygon clipping fast paths enabled\n");
     fprintf(stderr, "lift: Vita startup, data=%s heap=128 MiB\n", data_root);
     rc = launch_menu(&opts);
     if (rc != 0) {

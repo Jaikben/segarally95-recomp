@@ -3,7 +3,7 @@
 #include "startup_log.h"
 #include "bitmap_font.h"
 #include "gxm_math.h"
-#include "model2_geo_order.h"
+#include "gxm_order.h"
 #include "model2_geo_tex.h"
 #include "model2_host_aspect.h"
 #include "sys24_tile.h"
@@ -19,15 +19,22 @@ static unsigned g_performance_frame;
 
 enum {
     SOURCE_CAP = 256,
+    SOURCE_BUCKETS = 512,
     MATERIAL_CAP = 2048,
+    MATERIAL_BUCKETS = 4096,
     SOURCE_BUDGET = 32 * 1024 * 1024,
-    POOL_BYTES = 16 * 1024 * 1024
+    POOL_BYTES = 16 * 1024 * 1024,
+    MAX_BATCH_VERTICES = 65532
 };
+
+typedef struct {
+    unsigned x, y, w, h;
+} tile_bounds_t;
 
 typedef struct {
     u16 x, y, w, h;
     u8 sheet;
-    vita2d_texture *texture;
+    vita2d_texture texture;
 } source_t;
 
 typedef struct {
@@ -36,24 +43,32 @@ typedef struct {
 } material_t;
 
 static source_t g_sources[SOURCE_CAP];
+static u16 g_source_slots[SOURCE_BUCKETS];
 static unsigned g_source_count, g_source_bytes, g_sheet_gen;
+static SceUID g_source_uid = -1;
+static u8 *g_source_data;
+static int g_source_mapped;
 static material_t g_materials[MATERIAL_CAP];
+static u16 g_material_slots[MATERIAL_BUCKETS];
 static unsigned g_material_count;
 static vita2d_texture *g_bottom, *g_priority;
+static int g_priority_nonempty;
+static tile_bounds_t g_priority_bounds;
 static vita2d_texture *g_font;
-static unsigned *g_order, g_order_cap;
-static const model2_geo_tri_mat_t *g_sort_mats;
+static vita2d_texture *g_checker;
+static vita_painter_entry_t *g_order;
+static unsigned g_order_cap;
 static int g_initialized;
 static unsigned g_diagnostic_frames;
 static int g_diagnostic_due;
 static unsigned g_diagnostic_triangles;
+static unsigned g_diagnostic_draws, g_diagnostic_vertices, g_material_probes;
 static const char *g_diagnostic_geometry;
 
 static void clear_sources(void)
 {
-    unsigned i;
-    for (i = 0; i < g_source_count; i++)
-        vita2d_free_texture(g_sources[i].texture);
+    /* The caller fences GPU readers before recycling arena storage. */
+    memset(g_source_slots, 0, sizeof(g_source_slots));
     g_source_count = g_source_bytes = 0;
 }
 
@@ -64,6 +79,64 @@ static int fail(const char *what)
     vita_startup_log(message);
     fprintf(stderr, "lift: native GXM: %s\n", what);
     return -1;
+}
+
+static void release_source_arena(void)
+{
+    if (g_source_mapped) {
+        if (sceGxmUnmapMemory(g_source_data) < 0) {
+            fail("texture arena unmapping failed; retaining its storage");
+            return;
+        }
+        g_source_mapped = 0;
+    }
+    if (g_source_uid >= 0) {
+        if (sceKernelFreeMemBlock(g_source_uid) < 0) {
+            fail("texture arena release failed");
+            return;
+        }
+        g_source_uid = -1;
+        g_source_data = NULL;
+    }
+}
+
+static int source_arena_open(void)
+{
+    void *base = NULL;
+    if (g_source_mapped)
+        return 0;
+    if (g_source_uid >= 0)
+        return fail("previous texture arena release incomplete");
+    g_source_uid = sceKernelAllocMemBlock("segamod2 textures",
+        SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW, SOURCE_BUDGET, NULL);
+    if (g_source_uid < 0)
+        return fail("32 MiB texture arena allocation failed");
+    if (sceKernelGetMemBlockBase(g_source_uid, &base) < 0) {
+        release_source_arena();
+        return fail("texture arena base lookup failed");
+    }
+    g_source_data = base;
+    if (sceGxmMapMemory(g_source_data, SOURCE_BUDGET, SCE_GXM_MEMORY_ATTRIB_READ) < 0) {
+        release_source_arena();
+        return fail("texture arena mapping failed");
+    }
+    g_source_mapped = 1;
+    return 0;
+}
+
+static u32 hash_field(u32 hash, u32 value)
+{
+    return (hash ^ value) * 16777619u;
+}
+
+static u32 patch_hash(unsigned x, unsigned y, unsigned w, unsigned h, unsigned sheet)
+{
+    u32 hash = hash_field(2166136261u, x);
+    hash = hash_field(hash, y);
+    hash = hash_field(hash, w);
+    hash = hash_field(hash, h);
+    hash = hash_field(hash, sheet);
+    return hash ^ (hash >> 16);
 }
 
 static void *geometry_alloc(unsigned size, unsigned alignment)
@@ -100,6 +173,26 @@ static int create_font(void)
     return 0;
 }
 
+static int create_checker(void)
+{
+    unsigned stride;
+    u32 *pixels;
+    g_checker = vita2d_create_empty_texture(2, 2);
+    if (!g_checker)
+        return fail("checker mask allocation failed");
+    stride = vita2d_texture_get_stride(g_checker);
+    pixels = vita2d_texture_get_datap(g_checker);
+    if (!pixels || stride < 2u * sizeof(u32) || stride % sizeof(u32))
+        return fail("checker mask storage unavailable");
+    memset(pixels, 0, stride * 2u);
+    pixels[1] = pixels[stride / sizeof(u32)] = RGBA8(255, 255, 255, 255);
+    vita2d_texture_set_filters(g_checker, SCE_GXM_TEXTURE_FILTER_POINT, SCE_GXM_TEXTURE_FILTER_POINT);
+    if (sceGxmTextureSetUAddrMode(&g_checker->gxm_tex, SCE_GXM_TEXTURE_ADDR_REPEAT) < 0
+        || sceGxmTextureSetVAddrMode(&g_checker->gxm_tex, SCE_GXM_TEXTURE_ADDR_REPEAT) < 0)
+        return fail("checker mask addressing failed");
+    return 0;
+}
+
 static void draw_text(int left, int baseline, unsigned color, float scale, const char *text)
 {
     float size = scale * 2.0f;
@@ -133,6 +226,8 @@ int vita_gxm_open(void)
         return fail("libvita2d initialization failed");
     vita_startup_log("startup: libvita2d/GXM ready; tile texture allocation begin\n");
     g_initialized = 1;
+    g_priority_nonempty = 0;
+    memset(&g_priority_bounds, 0, sizeof(g_priority_bounds));
     vita2d_set_vblank_wait(0);
     vita2d_set_clear_color(RGBA8(0, 0, 0, 255));
     g_bottom = vita2d_create_empty_texture(SYS24_FB_WIDTH, SYS24_FB_HEIGHT);
@@ -142,7 +237,7 @@ int vita_gxm_open(void)
         vita_gxm_shutdown();
         return fail("tile texture allocation failed");
     }
-    if (create_font() != 0) {
+    if (create_font() != 0 || create_checker() != 0) {
         vita_gxm_shutdown();
         return -1;
     }
@@ -154,19 +249,25 @@ int vita_gxm_open(void)
 
 static vita2d_texture *source_for(const model2_geo_tri_mat_t *m)
 {
-    unsigned i, y, x;
+    unsigned y, x, slot, offset, stride, bytes;
     unsigned w = m->patch_w ? m->patch_w : 32;
     unsigned h = m->patch_h ? m->patch_h : 32;
     const u32 *sheet;
     source_t *s;
-    for (i = 0; i < g_source_count; i++) {
-        s = &g_sources[i];
+    slot = patch_hash(m->patch_x, m->patch_y, w, h, m->sheet) & (SOURCE_BUCKETS - 1u);
+    while (g_source_slots[slot]) {
+        s = &g_sources[g_source_slots[slot] - 1u];
         if (s->x == m->patch_x && s->y == m->patch_y && s->w == w
             && s->h == h && s->sheet == m->sheet)
-            return s->texture;
+            return &s->texture;
+        slot = (slot + 1u) & (SOURCE_BUCKETS - 1u);
     }
+    stride = (w + 7u) & ~7u;
+    bytes = stride * h;
+    offset = (g_source_bytes + SCE_GXM_TEXTURE_ALIGNMENT - 1u)
+        & ~(SCE_GXM_TEXTURE_ALIGNMENT - 1u);
     if (g_source_count == SOURCE_CAP || w > 4096 || h > 4096
-        || w * h + 8192u > SOURCE_BUDGET - g_source_bytes) {
+        || bytes > SOURCE_BUDGET - offset) {
         fail("texture cache budget exhausted (no geometry silently dropped)");
         return NULL;
     }
@@ -175,18 +276,20 @@ static vita2d_texture *source_for(const model2_geo_tri_mat_t *m)
         fail("texture sheet unavailable");
         return NULL;
     }
+    if (source_arena_open() != 0)
+        return NULL;
     s = &g_sources[g_source_count];
-    s->texture = vita2d_create_empty_texture_format(w, h, SCE_GXM_TEXTURE_FORMAT_P8_ABGR);
-    if (!s->texture) {
-        fail("indexed patch allocation failed");
+    memset(&s->texture, 0, sizeof(s->texture));
+    if (sceGxmTextureInitLinear(&s->texture.gxm_tex, g_source_data + offset,
+            SCE_GXM_TEXTURE_FORMAT_P8_ABGR, w, h, 0) < 0) {
+        fail("indexed patch initialization failed");
         return NULL;
     }
     s->x = m->patch_x; s->y = m->patch_y;
     s->w = (u16)w; s->h = (u16)h; s->sheet = m->sheet;
-    vita2d_texture_set_filters(s->texture, SCE_GXM_TEXTURE_FILTER_POINT, SCE_GXM_TEXTURE_FILTER_POINT);
+    vita2d_texture_set_filters(&s->texture, SCE_GXM_TEXTURE_FILTER_POINT, SCE_GXM_TEXTURE_FILTER_POINT);
     for (y = 0; y < h; y++) {
-        u8 *row = (u8 *)vita2d_texture_get_datap(s->texture)
-                  + y * vita2d_texture_get_stride(s->texture);
+        u8 *row = g_source_data + offset + y * stride;
         for (x = 0; x < w; x++) {
             /* Decode the same logical sheet coordinates as the GL R8 atlas. */
             row[x] = (u8)model2_get_texel(sheet, 0, 0,
@@ -194,9 +297,10 @@ static vita2d_texture *source_for(const model2_geo_tri_mat_t *m)
                          (int)((m->patch_y + y) & 1023u));
         }
     }
-    g_source_bytes += vita2d_texture_get_stride(s->texture) * h + 8192u;
+    g_source_bytes = offset + bytes;
+    g_source_slots[slot] = (u16)(g_source_count + 1u);
     g_source_count++;
-    return s->texture;
+    return &s->texture;
 }
 
 static int same_material(const model2_geo_tri_mat_t *a, const model2_geo_tri_mat_t *b)
@@ -209,14 +313,26 @@ static int same_material(const model2_geo_tri_mat_t *a, const model2_geo_tri_mat
 
 static const vita2d_texture *material_for(const model2_geo_tri_mat_t *m)
 {
-    unsigned i;
+    unsigned i, slot;
+    u32 hash = patch_hash(m->patch_x, m->patch_y, m->patch_w, m->patch_h, m->sheet);
     u8 rgba[64];
     u32 *palette;
     vita2d_texture *source;
     material_t *out;
-    for (i = 0; i < g_material_count; i++)
+    hash = hash_field(hash, m->colorbase);
+    hash = hash_field(hash, m->lumabase);
+    hash = hash_field(hash, m->luma);
+    hash = hash_field(hash, m->flags);
+    slot = (hash ^ (hash >> 16)) & (MATERIAL_BUCKETS - 1u);
+    for (;;) {
+        g_material_probes++;
+        if (!g_material_slots[slot])
+            break;
+        i = g_material_slots[slot] - 1u;
         if (same_material(m, &g_materials[i].key))
             return &g_materials[i].view;
+        slot = (slot + 1u) & (MATERIAL_BUCKETS - 1u);
+    }
     if (g_material_count == MATERIAL_CAP) {
         fail("per-frame material budget exhausted");
         return NULL;
@@ -245,17 +361,9 @@ static const vita2d_texture *material_for(const model2_geo_tri_mat_t *m)
         fail("GXM texture addressing or palette binding failed");
         return NULL;
     }
+    g_material_slots[slot] = (u16)(g_material_count + 1u);
     g_material_count++;
     return &out->view;
-}
-
-static int painter_compare(const void *va, const void *vb)
-{
-    unsigned a = *(const unsigned *)va, b = *(const unsigned *)vb;
-    if ((g_sort_mats[a].pad & 1u) != (g_sort_mats[b].pad & 1u))
-        return (g_sort_mats[a].pad & 1u) ? 1 : -1;
-    /* Alpha cutouts use painter ordering: reverse the hardware near-first list. */
-    return -model2_geo_depth_compare(&g_sort_mats[a], a, &g_sort_mats[b], b);
 }
 
 static vita2d_texture_vertex gpu_vertex(vita_screen_vertex_t v, float sx, float sy,
@@ -267,15 +375,53 @@ static vita2d_texture_vertex gpu_vertex(vita_screen_vertex_t v, float sx, float 
     };
 }
 
-static int draw_triangle(const vita_screen_vertex_t v[3], const model2_geo_tri_mat_t *m,
+typedef struct {
+    const vita2d_texture *texture;
+    void *vertices;
+    unsigned count, tint;
+} batch_t;
+
+static void flush_batch(batch_t *batch)
+{
+    if (!batch->count)
+        return;
+    if (batch->texture)
+        vita2d_draw_array_textured(batch->texture, SCE_GXM_PRIMITIVE_TRIANGLES,
+            batch->vertices, batch->count, batch->tint);
+    else
+        vita2d_draw_array(SCE_GXM_PRIMITIVE_TRIANGLES, batch->vertices, batch->count);
+    g_diagnostic_draws++;
+    g_diagnostic_vertices += batch->count;
+    batch->count = 0;
+}
+
+static void append_batch(batch_t *batch, const vita2d_texture *texture,
+                         void *vertices, unsigned count, unsigned tint)
+{
+    unsigned stride = texture ? sizeof(vita2d_texture_vertex) : sizeof(vita2d_color_vertex);
+    /* Never reorder polygons or span palette/alignment gaps in the shared pool. */
+    if (batch->count && (batch->texture != texture || batch->tint != tint
+        || batch->count + count > MAX_BATCH_VERTICES
+        || (u8 *)batch->vertices + batch->count * stride != vertices))
+        flush_batch(batch);
+    if (!batch->count) {
+        batch->texture = texture;
+        batch->vertices = vertices;
+        batch->tint = tint;
+    }
+    batch->count += count;
+}
+
+static int draw_triangle(batch_t *batch, const vita_screen_vertex_t v[3], const model2_geo_tri_mat_t *m,
                           float sx, float sy, float ox, float oy)
 {
     unsigned i, j, count = 0;
     unsigned alpha = (m->flags & MODEL2_GEO_TEX_CHECKER) ? 128 : 255;
     if (m->flags & MODEL2_GEO_TEX_TEXTURED) {
-        const unsigned subdivisions = v[0].q == v[1].q && v[1].q == v[2].q ? 1u : 4u;
+        const unsigned subdivisions = vita_perspective_subdivisions(v, sx, sy);
         const vita2d_texture *texture = material_for(m);
         vita2d_texture_vertex *vertices;
+        vita2d_texture_vertex grid[9][9];
         unsigned w = m->patch_w ? m->patch_w : 32;
         unsigned h = m->patch_h ? m->patch_h : 32;
         if (!texture)
@@ -283,46 +429,58 @@ static int draw_triangle(const vita_screen_vertex_t v[3], const model2_geo_tri_m
         vertices = geometry_alloc(3 * subdivisions * subdivisions * sizeof(*vertices), 4);
         if (!vertices)
             return fail("GPU vertex pool exhausted");
+        for (i = 0; i <= subdivisions; i++)
+            for (j = 0; j <= subdivisions - i; j++)
+                grid[i][j] = gpu_vertex(vita_barycentric(v,
+                    (float)i / subdivisions, (float)j / subdivisions),
+                    sx, sy, ox, oy, w, h);
         for (i = 0; i < subdivisions; i++) {
             for (j = 0; j < subdivisions - i; j++) {
-                float b = (float)i / subdivisions, c = (float)j / subdivisions;
-                float step = 1.0f / subdivisions;
-                vita_screen_vertex_t a = vita_barycentric(v, b, c);
-                vita_screen_vertex_t bb = vita_barycentric(v, b + step, c);
-                vita_screen_vertex_t cc = vita_barycentric(v, b, c + step);
-                vertices[count++] = gpu_vertex(a, sx, sy, ox, oy, w, h);
-                vertices[count++] = gpu_vertex(bb, sx, sy, ox, oy, w, h);
-                vertices[count++] = gpu_vertex(cc, sx, sy, ox, oy, w, h);
+                vertices[count++] = grid[i][j];
+                vertices[count++] = grid[i + 1][j];
+                vertices[count++] = grid[i][j + 1];
                 if (j + i + 1 < subdivisions) {
-                    vita_screen_vertex_t d = vita_barycentric(v, b + step, c + step);
-                    vertices[count++] = gpu_vertex(bb, sx, sy, ox, oy, w, h);
-                    vertices[count++] = gpu_vertex(d, sx, sy, ox, oy, w, h);
-                    vertices[count++] = gpu_vertex(cc, sx, sy, ox, oy, w, h);
+                    vertices[count++] = grid[i + 1][j];
+                    vertices[count++] = grid[i + 1][j + 1];
+                    vertices[count++] = grid[i][j + 1];
                 }
             }
         }
-        vita2d_draw_array_textured(texture, SCE_GXM_PRIMITIVE_TRIANGLES,
-                                   vertices, count, RGBA8(255, 255, 255, alpha));
+        append_batch(batch, texture, vertices, count, RGBA8(255, 255, 255, alpha));
     } else {
         u8 rgb[3];
+        model2_palette_lookup_solid(m->colorbase, m->luma, rgb);
+        if (m->flags & MODEL2_GEO_TEX_CHECKER) {
+            vita2d_texture_vertex *vertices = geometry_alloc(3 * sizeof(*vertices), 4);
+            if (!vertices)
+                return fail("GPU checker vertex pool exhausted");
+            for (i = 0; i < 3; i++)
+                vertices[i] = (vita2d_texture_vertex){
+                    ox + v[i].x * sx, oy + v[i].y * sy, 0.5f,
+                    v[i].x * 0.5f, v[i].y * 0.5f
+                };
+            append_batch(batch, g_checker, vertices, 3, RGBA8(rgb[0], rgb[1], rgb[2], 255));
+            return 0;
+        }
         vita2d_color_vertex *vertices = geometry_alloc(3 * sizeof(*vertices), 4);
         if (!vertices)
             return fail("GPU solid vertex pool exhausted");
-        model2_palette_lookup_solid(m->colorbase, m->luma, rgb);
         for (i = 0; i < 3; i++)
             vertices[i] = (vita2d_color_vertex){
                 ox + v[i].x * sx, oy + v[i].y * sy, 0.5f,
                 RGBA8(rgb[0], rgb[1], rgb[2], alpha)
             };
-        vita2d_draw_array(SCE_GXM_PRIMITIVE_TRIANGLES, vertices, 3);
+        append_batch(batch, NULL, vertices, 3, 0);
     }
     return 0;
 }
 
 static int draw_geometry(float sx, float sy, float ox, float oy)
 {
+    batch_t batch = {0};
     const float *xyzuv;
     const model2_geo_tri_mat_t *mats;
+    const vita_painter_entry_t *order;
     model2_geo_projection_t p;
     unsigned nverts, ntris, t, i;
     int result = 0;
@@ -343,21 +501,29 @@ static int draw_geometry(float sx, float sy, float ox, float oy)
         return fail("invalid expanded geometry snapshot");
     }
     if (ntris > g_order_cap) {
-        unsigned *order = realloc(g_order, (size_t)ntris * sizeof(*order));
-        if (!order) {
+        vita_painter_entry_t *storage;
+        if ((size_t)ntris > SIZE_MAX / sizeof(*storage) / 2u) {
+            model2_geo_unlock();
+            return fail("polygon order size overflow");
+        }
+        storage = realloc(g_order, (size_t)ntris * 2u * sizeof(*storage));
+        if (!storage) {
             model2_geo_unlock();
             return fail("polygon order allocation failed");
         }
-        g_order = order;
+        g_order = storage;
         g_order_cap = ntris;
     }
-    g_sort_mats = mats;
-    for (t = 0; t < ntris; t++)
-        g_order[t] = t;
-    if (ntris)
-        qsort(g_order, ntris, sizeof(*g_order), painter_compare);
+    for (t = 0; t < ntris; t++) {
+        g_order[t].index = t;
+        if (!vita_painter_key(&mats[t], &g_order[t].key)) {
+            model2_geo_unlock();
+            return fail("non-finite polygon sort depth");
+        }
+    }
+    order = ntris ? vita_painter_sort(g_order, g_order + g_order_cap, ntris) : g_order;
     for (t = 0; t < ntris && result == 0; t++) {
-        unsigned tri = g_order[t], n;
+        unsigned tri = order[t].index, n;
         vita_camera_vertex_t in[3], near[4];
         vita_screen_vertex_t screen[12];
         for (i = 0; i < 3; i++) {
@@ -377,25 +543,45 @@ static int draw_geometry(float sx, float sy, float ox, float oy)
         n = vita_clip_screen(screen, n, &p);
         for (i = 1; i + 1 < n && result == 0; i++) {
             vita_screen_vertex_t fan[3] = {screen[0], screen[i], screen[i+1]};
-            result = draw_triangle(fan, &mats[tri], sx, sy, ox, oy);
+            result = draw_triangle(&batch, fan, &mats[tri], sx, sy, ox, oy);
         }
     }
+    flush_batch(&batch);
     model2_geo_unlock();
     return result;
 }
 
-static void upload_tiles(vita2d_texture *texture, const u32 *pixels, int opaque)
+static int upload_tiles(vita2d_texture *texture, const u32 *pixels, int opaque,
+                       tile_bounds_t *bounds)
 {
-    unsigned y, x;
+    int has_pixels = 0;
+    unsigned left = SYS24_FB_WIDTH, top = SYS24_FB_HEIGHT;
+    unsigned right = 0, bottom = 0, y, x;
     unsigned stride = vita2d_texture_get_stride(texture);
     u8 *base = vita2d_texture_get_datap(texture);
     for (y = 0; y < SYS24_FB_HEIGHT; y++) {
         u32 *row = (u32 *)(base + y * stride);
         for (x = 0; x < SYS24_FB_WIDTH; x++) {
             u32 p = pixels[y * SYS24_FB_WIDTH + x];
+            if (p & 0xffffffu) {
+                has_pixels = 1;
+                if (bounds) {
+                    if (x < left) left = x;
+                    if (y < top) top = y;
+                    if (x + 1u > right) right = x + 1u;
+                    if (y + 1u > bottom) bottom = y + 1u;
+                }
+            }
             row[x] = !opaque && !(p & 0xffffffu) ? 0 : vita_swap_rb(p | 0xff000000u);
         }
     }
+    if (bounds) {
+        bounds->x = has_pixels ? left : 0;
+        bounds->y = has_pixels ? top : 0;
+        bounds->w = has_pixels ? right - left : 0;
+        bounds->h = has_pixels ? bottom - top : 0;
+    }
+    return has_pixels;
 }
 
 static void draw_menu(int have_game)
@@ -455,6 +641,7 @@ int vita_gxm_present(const u32 *bottom, const u32 *priority, int opaque,
         || (g_diagnostic_frames <= 1800u && g_diagnostic_frames % 120u == 0)
         || g_diagnostic_frames % 300u == 0;
     g_diagnostic_triangles = 0;
+    g_diagnostic_draws = g_diagnostic_vertices = g_material_probes = 0;
     g_diagnostic_geometry = opaque ? "tiles only" : "not started";
     if (g_diagnostic_due) {
         char message[192];
@@ -476,11 +663,13 @@ int vita_gxm_present(const u32 *bottom, const u32 *priority, int opaque,
         g_sheet_gen = model2_tex_sheets_dirty_gen();
     }
     if (tiles_dirty) {
-        upload_tiles(g_bottom, bottom, opaque);
+        upload_tiles(g_bottom, bottom, opaque, NULL);
         if (!opaque)
-            upload_tiles(g_priority, priority, 0);
+            g_priority_nonempty = upload_tiles(g_priority, priority, 0,
+                                               &g_priority_bounds);
     }
     g_material_count = 0;
+    memset(g_material_slots, 0, sizeof(g_material_slots));
     vita2d_start_drawing();
     sceGxmSetFrontDepthFunc(vita2d_get_context(), SCE_GXM_DEPTH_FUNC_ALWAYS);
     sceGxmSetBackDepthFunc(vita2d_get_context(), SCE_GXM_DEPTH_FUNC_ALWAYS);
@@ -490,15 +679,23 @@ int vita_gxm_present(const u32 *bottom, const u32 *priority, int opaque,
     vita2d_draw_texture_scale(g_bottom, hud_x, 0, hud_scale, hud_scale);
     if (!opaque) {
         result = draw_geometry(geo_w / SYS24_FB_WIDTH, hud_scale, (960.0f - geo_w) * 0.5f, 0);
-        vita2d_draw_texture_scale(g_priority, hud_x, 0, hud_scale, hud_scale);
+        if (g_priority_nonempty)
+            vita2d_draw_texture_tint_part_scale(g_priority,
+                hud_x + g_priority_bounds.x * hud_scale,
+                g_priority_bounds.y * hud_scale,
+                (float)g_priority_bounds.x, (float)g_priority_bounds.y,
+                (float)g_priority_bounds.w, (float)g_priority_bounds.h,
+                hud_scale, hud_scale, RGBA8(255, 255, 255, 255));
     }
     vita2d_end_drawing();
     vita2d_swap_buffers();
     if (g_diagnostic_due) {
-        char message[160];
+        char message[256];
         snprintf(message, sizeof(message),
-                 "runtime: GXM frame=%u submitted geometry=%s triangles=%u result=%d\n",
-                 g_diagnostic_frames, g_diagnostic_geometry, g_diagnostic_triangles, result);
+                 "runtime: GXM frame=%u submitted geometry=%s triangles=%u result=%d draws=%u vertices=%u materials=%u probes=%u sources=%u source_bytes=%u\n",
+                 g_diagnostic_frames, g_diagnostic_geometry, g_diagnostic_triangles, result,
+                 g_diagnostic_draws, g_diagnostic_vertices, g_material_count,
+                 g_material_probes, g_source_count, g_source_bytes);
         vita_startup_log(message);
     }
 #if defined(I960_HOST_VITA_GXM)
@@ -525,11 +722,15 @@ void vita_gxm_shutdown(void)
         return;
     vita2d_wait_rendering_done();
     clear_sources();
+    release_source_arena();
     if (g_bottom) vita2d_free_texture(g_bottom);
     if (g_priority) vita2d_free_texture(g_priority);
     if (g_font) vita2d_free_texture(g_font);
+    if (g_checker) vita2d_free_texture(g_checker);
     g_bottom = g_priority = NULL;
     g_font = NULL;
+    g_checker = NULL;
+    g_priority_nonempty = 0;
     free(g_order);
     g_order = NULL;
     g_order_cap = 0;

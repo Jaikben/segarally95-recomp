@@ -6,8 +6,8 @@
 #include <string.h>
 
 vita_menu_t g_vita_menu;
-static const int cpu_choices[] = {111, 222, 333, 444};
-static const int gpu_choices[] = {41, 77, 111, 166};
+static const int cpu_choices[] = {111, 222, 333, 444, 500, 0};
+static const int gpu_choices[] = {41, 77, 111, 166, 0};
 
 void vita_settings_defaults(vita_settings_t *s)
 {
@@ -17,7 +17,7 @@ void vita_settings_defaults(vita_settings_t *s)
 static int valid_clock(int value, const int *choices)
 {
     int i;
-    for (i = 0; i < 4; ++i)
+    for (i = 0; choices[i]; ++i)
         if (value == choices[i])
             return 1;
     return 0;
@@ -152,10 +152,12 @@ void vita_menu_open(vita_menu_t *m)
 
 static int cycle(int value, const int *choices, int direction)
 {
-    int i;
-    for (i = 0; i < 4; ++i)
+    int i, count = 0;
+    while (choices[count])
+        count++;
+    for (i = 0; i < count; ++i)
         if (choices[i] == value)
-            return choices[(i + (direction < 0 ? 3 : 1)) % 4];
+            return choices[(i + (direction < 0 ? count - 1 : 1)) % count];
     return choices[0];
 }
 

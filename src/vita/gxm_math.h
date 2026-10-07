@@ -19,6 +19,10 @@ static inline unsigned vita_clip_near(const vita_camera_vertex_t in[3],
 {
     unsigned i, n = 0;
     const float near_z = 0.01f;
+    if (in[0].z >= near_z && in[1].z >= near_z && in[2].z >= near_z) {
+        memcpy(out, in, 3u * sizeof(*out));
+        return 3;
+    }
     for (i = 0; i < 3; i++) {
         const vita_camera_vertex_t *a = &in[i], *b = &in[(i + 1) % 3];
         if (a->z >= near_z)
@@ -60,6 +64,12 @@ static inline unsigned vita_clip_screen(vita_screen_vertex_t *vertices, unsigned
 {
     vita_screen_vertex_t tmp[12];
     unsigned plane, i;
+    for (i = 0; i < n; i++)
+        if (!(vertices[i].x >= p->viewport[0] && vertices[i].y >= p->viewport[1]
+            && vertices[i].x <= p->viewport[2] && vertices[i].y <= p->viewport[3]))
+            break;
+    if (i == n)
+        return n;
     for (plane = 0; plane < 4 && n; plane++) {
         unsigned count = 0;
         float edge = (float)p->viewport[plane];
@@ -91,6 +101,30 @@ static inline vita_screen_vertex_t vita_barycentric(const vita_screen_vertex_t v
         a * v[0].uq + b * v[1].uq + c * v[2].uq,
         a * v[0].vq + b * v[1].vq + c * v[2].vq
     };
+}
+
+static inline unsigned vita_perspective_subdivisions(const vita_screen_vertex_t v[3],
+                                                     float sx, float sy)
+{
+    if (v[0].q == v[1].q && v[1].q == v[2].q)
+        return 1;
+    float min_q = v[0].q, max_q = v[0].q;
+    float min_x = v[0].x, max_x = v[0].x;
+    float min_y = v[0].y, max_y = v[0].y;
+    unsigned i;
+    for (i = 1; i < 3; i++) {
+        min_q = fminf(min_q, v[i].q);
+        max_q = fmaxf(max_q, v[i].q);
+        min_x = fminf(min_x, v[i].x);
+        max_x = fmaxf(max_x, v[i].x);
+        min_y = fminf(min_y, v[i].y);
+        max_y = fmaxf(max_y, v[i].y);
+    }
+    /* Retain the existing quality floor; increase detail for steep road spans. */
+    if (max_q > 3.0f * min_q
+        && fmaxf((max_x - min_x) * sx, (max_y - min_y) * sy) > 320.0f)
+        return 8;
+    return 4;
 }
 
 static inline unsigned vita_swap_rb(unsigned p)

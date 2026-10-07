@@ -696,13 +696,6 @@ static int decode_fifos_locked(void)
          * chasing desert remote flash. Empty latches keep the last mesh above.
          */
         if (decoded && prg_mesh.n_verts > 0) {
-            u32 matrix_sig =
-                hash_bytes(2166136261u, prg_mtx,
-                           (size_t)mtx_n * 12u * sizeof(float));
-            u32 mesh_sig =
-                hash_bytes(2166136261u, prg_mesh.verts,
-                           (size_t)prg_mesh.n_verts * sizeof(*prg_mesh.verts));
-
             model2_mesh_collector_reset(&g_mesh);
             model2_mesh_collector_append(&g_mesh, &prg_mesh);
             s_copro_scraped = copro_total;
@@ -715,6 +708,12 @@ static int decode_fifos_locked(void)
                 unsigned exp_tris = 0;
                 float zmin = 0.f, zmax = 0.f;
                 float xmin = 0.f, xmax = 0.f;
+                u32 matrix_sig =
+                    hash_bytes(2166136261u, prg_mtx,
+                               (size_t)mtx_n * 12u * sizeof(float));
+                u32 mesh_sig =
+                    hash_bytes(2166136261u, prg_mesh.verts,
+                               (size_t)prg_mesh.n_verts * sizeof(*prg_mesh.verts));
 
                 for (mi = 0; mi < mtx_n; mi++) {
                     const float *m = &prg_mtx[mi * 12u];

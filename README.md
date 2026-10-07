@@ -159,12 +159,52 @@ overwrote the adjacent ROM pointer/size in the Vita build, leaving splash and
 geometry data inaccessible after SOUND INITIALIZE.
 Tile caches update only changed map entries and referenced 32-byte glyphs;
 scrolling and palette changes do not decode every layer again. Constant-depth
-textured triangles use one triangle instead of 16 equivalent subdivisions;
-varying-depth triangles retain the existing perspective approximation.
+textured triangles use one triangle instead of 16 equivalent subdivisions.
+Following Daytona's Vita renderer, perspective lattice vertices are evaluated
+once and reused within each triangle. Varying-depth triangles keep at least
+4x4 subdivision; large spans (over 320 display pixels) with reciprocal-depth
+ratios over 3 use 8x8 subdivision to reduce road texture warping. Unlike
+Daytona's adaptive low-detail and pool-pressure paths, quality is not reduced
+for small triangles or exhausted pools; allocation failures remain explicit.
+Solid checkerboard shadows use a point-filtered repeating 2x2 mask anchored
+to native screen coordinates, rather than half-alpha blending. Textured
+checker polygons retain the existing approximation.
+Source and per-frame material lookups use bounded hash tables with exact
+collision checks. Consecutive compatible triangles share a draw call without
+changing painter order, clipping, palette contents or perspective subdivision.
+Painter order now uses precomputed keys and a stable radix sort, with insertion
+sorting for at most 32 triangles. Hardware depth quantization, saturated-depth
+float comparisons, world/overlay grouping and original-index ties are unchanged.
+Two reusable sort arrays occupy about 256 KiB for 8,192 triangles (previously
+32 KiB for one index array). Fully visible polygons bypass near/screen clipping,
+and constant-depth triangles bypass perspective-bound calculations.
+Indexed patches share one lazily allocated 32 MiB CDRAM arena instead of a
+separate kernel allocation per texture; its budget includes padded row strides
+and texture alignment. Arena recycling and release retain the GPU completion
+fence. Material palettes are still rebuilt each frame to reflect palette/luma
+changes. These adapt Daytona's caching, batching and arena patterns without
+its deferred-material or quality-reducing policies.
 Runtime GXM probes continue every 300 frames beyond the startup sampling
-window, with interval FPS and CPU-side presentation time. These are not GPU
+window, with interval FPS, CPU-side presentation time, geometry draw/vertex
+counts, material lookup probes and source-arena usage. These are not GPU
 timings; a log ending without an error/exit marker does not establish the
 cause of an emulator termination.
+`source_bytes` is occupied patch storage within the reserved 32 MiB arena,
+not the total renderer memory allocation.
+
+The host GXM test executable accepts `--benchmark` for a fixed 200-frame,
+8,192-triangle constant-depth workload, `--benchmark-varying` for the same
+workload with perspective subdivision, and `--snapshot <path>` for an ordered binary stream
+of vertices, palettes, addressing and tint values. Snapshot streams can be
+compared byte-for-byte between renderer versions, independently of batching.
+The shim benchmark measures host CPU work, not Vita/Vita3K FPS or GPU time.
+Against the preceding comparison-sort/clipping path with identical tessellation,
+seven alternating runs measured median times of 0.369 to 0.175 seconds
+(constant-depth) and 0.739 to 0.578 seconds (varying-depth) on the development
+host. These are approximately 53% and 22% less CPU time for these synthetic
+workloads, not gameplay speed claims. Ordered output snapshots matched
+byte-for-byte; helper tests also compare randomized sort orders and 6,000
+clipping cases against the preceding algorithms.
 
 UI text uses a small built-in bitmap atlas drawn with native GXM. The application
 does not load firmware PGF/PVF fonts or call `scePgf`/`scePvf`; this avoids the
@@ -178,7 +218,7 @@ workers and cold-boots again; it does not erase cabinet settings.
 Failed ROM loading returns to the launch menu so you can retry after fixing
 the board dumps.
 
-Options provide CPU clocks (111/222/333/444 MHz), GPU clocks
+Options provide CPU clocks (111/222/333/444/500 MHz), GPU clocks
 (41/77/111/166 MHz), volume, mute, steering dead zone (0–40%) and inverted
 steering. Changes apply immediately and persist in
 `ux0:data/segamod2/vita.cfg`; settings saves use a temporary file and retain a
