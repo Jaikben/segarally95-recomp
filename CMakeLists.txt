@@ -336,8 +336,8 @@ endif()
 if(VITA)
   vita_create_self(segamod2.self segamod2 UNSAFE)
   vita_create_vpk(segamod2.vpk "SEGARALY1" segamod2.self
-    VERSION "01.00"
-    NAME "Sega Rally Championship")
+    VERSION "01.01"
+    NAME "Sega Rally Championship (Vita fixes)")
   # vita_create_vpk/vita_create_self name their real (ALL, auto-building)
   # target "<file>-vpk"/"<file>-self" on CMake >= 3.20; alias a stable name.
   if(CMAKE_VERSION VERSION_LESS "3.20.0")
@@ -345,6 +345,18 @@ if(VITA)
   else()
     add_custom_target(lift-vpk DEPENDS segamod2.vpk-vpk)
   endif()
+
+  # segamod2.vpk keeps its stable name for existing build/test tooling (see
+  # .github/agents/psvita-build.agent.md). This tagged copy is just so test
+  # VPKs downloaded from the codespace over multiple rounds of fixes don't
+  # overwrite each other by filename — bump the tag when notable fixes land.
+  set(SEGAMOD2_VITA_BUILD_TAG "shadowfix-tessfix" CACHE STRING
+    "Descriptive suffix for the tagged copy of segamod2.vpk")
+  add_custom_command(TARGET lift-vpk POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy
+      ${CMAKE_BINARY_DIR}/segamod2.vpk
+      ${CMAKE_BINARY_DIR}/segamod2-${SEGAMOD2_VITA_BUILD_TAG}.vpk
+    COMMENT "Copying tagged VPK: segamod2-${SEGAMOD2_VITA_BUILD_TAG}.vpk")
 endif()
 
 # --- ROM extract ------------------------------------------------------------

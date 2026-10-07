@@ -120,10 +120,22 @@ static inline unsigned vita_perspective_subdivisions(const vita_screen_vertex_t 
         min_y = fminf(min_y, v[i].y);
         max_y = fmaxf(max_y, v[i].y);
     }
-    /* Retain the existing quality floor; increase detail for steep road spans. */
-    if (max_q > 3.0f * min_q
-        && fmaxf((max_x - min_x) * sx, (max_y - min_y) * sy) > 320.0f)
-        return 8;
+    {
+        float span = fmaxf((max_x - min_x) * sx, (max_y - min_y) * sy);
+        /* Flat sub-triangles can't show perspective warping on something a
+         * few pixels wide — the 4x4 floor below was costing ~48 vertices on
+         * every distant/small textured triangle regardless of screen size,
+         * which measured as a 28-40x vertex amplification (and the matching
+         * present_us/fps cliff) on real hardware during normal race scenes.
+         * Tune SMALL_TRI_SPAN_PX up if this still shows texture warping on
+         * small-but-visible polygons; tune it down if more speed is needed. */
+        enum { SMALL_TRI_SPAN_PX = 24 };
+        if (span <= (float)SMALL_TRI_SPAN_PX)
+            return 1;
+        /* Retain the existing quality floor; increase detail for steep road spans. */
+        if (max_q > 3.0f * min_q && span > 320.0f)
+            return 8;
+    }
     return 4;
 }
 

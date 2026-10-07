@@ -161,11 +161,16 @@ Tile caches update only changed map entries and referenced 32-byte glyphs;
 scrolling and palette changes do not decode every layer again. Constant-depth
 textured triangles use one triangle instead of 16 equivalent subdivisions.
 Following Daytona's Vita renderer, perspective lattice vertices are evaluated
-once and reused within each triangle. Varying-depth triangles keep at least
-4x4 subdivision; large spans (over 320 display pixels) with reciprocal-depth
-ratios over 3 use 8x8 subdivision to reduce road texture warping. Unlike
-Daytona's adaptive low-detail and pool-pressure paths, quality is not reduced
-for small triangles or exhausted pools; allocation failures remain explicit.
+once and reused within each triangle. Varying-depth triangles 24 display
+pixels or smaller skip subdivision (flat shading can't show perspective
+warping at that size); larger ones keep at least 4x4 subdivision, and large
+spans (over 320 display pixels) with reciprocal-depth ratios over 3 use 8x8
+subdivision to reduce road texture warping. Real-hardware logs showed the
+unconditional 4x4 floor amplifying a ~3,000-4,400 triangle race scene into
+105,000-123,000 GPU vertices (present_us 16,000-36,000 vs. a 16,600 budget at
+60fps); the small-triangle skip targets that without reducing detail on the
+large/near polygons that actually need it. Allocation failures remain
+explicit (pool exhaustion is not silently downgraded to lower detail).
 Solid checkerboard shadows use a point-filtered repeating 2x2 mask anchored
 to native screen coordinates, rather than half-alpha blending. Textured
 checker polygons retain the existing approximation.
