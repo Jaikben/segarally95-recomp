@@ -350,8 +350,14 @@ if(VITA)
   # .github/agents/psvita-build.agent.md). This tagged copy is just so test
   # VPKs downloaded from the codespace over multiple rounds of fixes don't
   # overwrite each other by filename — bump the tag when notable fixes land.
-  set(SEGAMOD2_VITA_BUILD_TAG "shadowfix-tessfix" CACHE STRING
-    "Descriptive suffix for the tagged copy of segamod2.vpk")
+  # Not CACHEd on purpose: a CACHE var keeps its first-ever value and ignores
+  # later edits here unless the build dir is reconfigured from scratch, which
+  # defeats the point of bumping it per round of fixes.
+  if(NOT DEFINED SEGAMOD2_VITA_BUILD_TAG_OVERRIDE)
+    set(SEGAMOD2_VITA_BUILD_TAG "shadowdiag")
+  else()
+    set(SEGAMOD2_VITA_BUILD_TAG "${SEGAMOD2_VITA_BUILD_TAG_OVERRIDE}")
+  endif()
   add_custom_command(TARGET lift-vpk POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy
       ${CMAKE_BINARY_DIR}/segamod2.vpk
