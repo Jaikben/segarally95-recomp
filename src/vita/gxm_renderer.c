@@ -454,11 +454,16 @@ static int draw_triangle(batch_t *batch, const vita_screen_vertex_t v[3], const 
             vita2d_texture_vertex *vertices = geometry_alloc(3 * sizeof(*vertices), 4);
             if (!vertices)
                 return fail("GPU checker vertex pool exhausted");
-            for (i = 0; i < 3; i++)
-                vertices[i] = (vita2d_texture_vertex){
-                    ox + v[i].x * sx, oy + v[i].y * sy, 0.5f,
-                    v[i].x * 0.5f, v[i].y * 0.5f
-                };
+            for (i = 0; i < 3; i++) {
+                /* UV must track the actual display pixel, not the pre-upscale
+                 * game coordinate — otherwise the 2x2 dither cell spans more
+                 * than one real pixel (sx/sy > 1 on Vita's 960x544 panel) and
+                 * the checkerboard comes out stretched/moire instead of a
+                 * clean per-pixel mask. */
+                float sxp = ox + v[i].x * sx;
+                float syp = oy + v[i].y * sy;
+                vertices[i] = (vita2d_texture_vertex){sxp, syp, 0.5f, sxp * 0.5f, syp * 0.5f};
+            }
             append_batch(batch, g_checker, vertices, 3, RGBA8(rgb[0], rgb[1], rgb[2], 255));
             return 0;
         }
