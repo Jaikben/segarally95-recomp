@@ -63,6 +63,8 @@ static unsigned g_diagnostic_frames;
 static int g_diagnostic_due;
 static unsigned g_diagnostic_triangles;
 static unsigned g_diagnostic_draws, g_diagnostic_vertices, g_material_probes;
+static unsigned g_diagnostic_checker_tris;
+static unsigned g_diagnostic_checker_rgb; /* last shadow tri's RGB, for log visibility */
 static const char *g_diagnostic_geometry;
 
 static void clear_sources(void)
@@ -454,6 +456,8 @@ static int draw_triangle(batch_t *batch, const vita_screen_vertex_t v[3], const 
             vita2d_texture_vertex *vertices = geometry_alloc(3 * sizeof(*vertices), 4);
             if (!vertices)
                 return fail("GPU checker vertex pool exhausted");
+            g_diagnostic_checker_tris++;
+            g_diagnostic_checker_rgb = RGBA8(rgb[0], rgb[1], rgb[2], 255);
             for (i = 0; i < 3; i++) {
                 /* UV must track the actual display pixel, not the pre-upscale
                  * game coordinate — otherwise the 2x2 dither cell spans more
@@ -653,6 +657,8 @@ int vita_gxm_present(const u32 *bottom, const u32 *priority, int opaque,
             || (g_diagnostic_frames <= 1800u && g_diagnostic_frames % 120u == 0);
         g_diagnostic_triangles = 0;
         g_diagnostic_draws = g_diagnostic_vertices = g_material_probes = 0;
+        g_diagnostic_checker_tris = 0;
+        g_diagnostic_checker_rgb = 0;
         g_diagnostic_geometry = opaque ? "tiles only" : "not started";
         if (pixel_scan_due) {
             char message[192];
@@ -713,10 +719,11 @@ int vita_gxm_present(const u32 *bottom, const u32 *priority, int opaque,
     if (g_diagnostic_due) {
         char message[256];
         snprintf(message, sizeof(message),
-                 "runtime: GXM frame=%u submitted geometry=%s triangles=%u result=%d draws=%u vertices=%u materials=%u probes=%u sources=%u source_bytes=%u\n",
+                 "runtime: GXM frame=%u submitted geometry=%s triangles=%u result=%d draws=%u vertices=%u materials=%u probes=%u sources=%u source_bytes=%u checker_tris=%u checker_rgba=%#x\n",
                  g_diagnostic_frames, g_diagnostic_geometry, g_diagnostic_triangles, result,
                  g_diagnostic_draws, g_diagnostic_vertices, g_material_count,
-                 g_material_probes, g_source_count, g_source_bytes);
+                 g_material_probes, g_source_count, g_source_bytes,
+                 g_diagnostic_checker_tris, g_diagnostic_checker_rgb);
         vita_startup_log(message);
     }
 #if defined(I960_HOST_VITA_GXM)
