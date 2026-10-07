@@ -640,20 +640,27 @@ int vita_gxm_present(const u32 *bottom, const u32 *priority, int opaque,
     g_diagnostic_due = g_diagnostic_frames <= 3u
         || (g_diagnostic_frames <= 1800u && g_diagnostic_frames % 120u == 0)
         || g_diagnostic_frames % 300u == 0;
-    g_diagnostic_triangles = 0;
-    g_diagnostic_draws = g_diagnostic_vertices = g_material_probes = 0;
-    g_diagnostic_geometry = opaque ? "tiles only" : "not started";
-    if (g_diagnostic_due) {
-        char message[192];
-        unsigned i, bottom_pixels = 0, priority_pixels = 0;
-        for (i = 0; i < SYS24_FB_WIDTH * SYS24_FB_HEIGHT; i++) {
-            bottom_pixels += (bottom[i] & 0xffffffu) != 0;
-            priority_pixels += !opaque && (priority[i] & 0xffffffu) != 0;
+    /* Full-framebuffer pixel scan is startup-bringup diagnostics only — drop it
+     * from the perpetual 300-frame cadence so idle/menu/2D-only screens don't
+     * keep paying an O(w*h) scan forever just for a log line. */
+    {
+        int pixel_scan_due = g_diagnostic_frames <= 3u
+            || (g_diagnostic_frames <= 1800u && g_diagnostic_frames % 120u == 0);
+        g_diagnostic_triangles = 0;
+        g_diagnostic_draws = g_diagnostic_vertices = g_material_probes = 0;
+        g_diagnostic_geometry = opaque ? "tiles only" : "not started";
+        if (pixel_scan_due) {
+            char message[192];
+            unsigned i, bottom_pixels = 0, priority_pixels = 0;
+            for (i = 0; i < SYS24_FB_WIDTH * SYS24_FB_HEIGHT; i++) {
+                bottom_pixels += (bottom[i] & 0xffffffu) != 0;
+                priority_pixels += !opaque && (priority[i] & 0xffffffu) != 0;
+            }
+            snprintf(message, sizeof(message),
+                     "runtime: GXM frame=%u begin opaque=%d dirty=%d bottom_pixels=%u priority_pixels=%u\n",
+                     g_diagnostic_frames, opaque, tiles_dirty, bottom_pixels, priority_pixels);
+            vita_startup_log(message);
         }
-        snprintf(message, sizeof(message),
-                 "runtime: GXM frame=%u begin opaque=%d dirty=%d bottom_pixels=%u priority_pixels=%u\n",
-                 g_diagnostic_frames, opaque, tiles_dirty, bottom_pixels, priority_pixels);
-        vita_startup_log(message);
     }
     /* Triple buffering does not protect the shared pool or uploaded textures. */
     vita2d_wait_rendering_done();

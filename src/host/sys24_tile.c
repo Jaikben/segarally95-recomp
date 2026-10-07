@@ -50,6 +50,13 @@ static const u32 s_layer_map_offset[SYS24_LAYER_COUNT] = {
 };
 /* Pair index → tilemap used by draw_common when ctrl&0x6000==0 (MAME line 462). */
 
+/* Palette rarely changes while tile_map/char_ram animate every frame — cache
+ * the decoded pens[] by raw palram bytes so unchanged palettes (the common
+ * case) skip SYS24_PEN_COUNT divisions, twice per rebuild (bottom + priority). */
+static u8 s_pens_palram_cache[SYS24_PEN_COUNT * 2];
+static u32 s_pens_cache[SYS24_PEN_COUNT];
+static int s_pens_cache_valid;
+
 static u32 rgb15_pen(const u8 *palram, u16 pen)
 {
     const u16 *p = (const u16 *)palram;
@@ -633,8 +640,20 @@ void sys24_tile_draw_layers_rgb32(sys24_tile_state_t *st, u32 *bitmap, const u8 
 
     for (i = 0; i < SYS24_FB_WIDTH * SYS24_FB_HEIGHT; i++)
         bitmap[i] = clear_color;
-    for (i = 0; i < SYS24_PEN_COUNT; i++)
-        pens[i] = rgb15_pen(palram, (u16)i);
+    if (palram && s_pens_cache_valid
+        && memcmp(palram, s_pens_palram_cache, sizeof(s_pens_palram_cache)) == 0) {
+        memcpy(pens, s_pens_cache, sizeof(pens));
+    } else {
+        for (i = 0; i < SYS24_PEN_COUNT; i++)
+            pens[i] = rgb15_pen(palram, (u16)i);
+        if (palram) {
+            memcpy(s_pens_palram_cache, palram, sizeof(s_pens_palram_cache));
+            memcpy(s_pens_cache, pens, sizeof(pens));
+            s_pens_cache_valid = 1;
+        } else {
+            s_pens_cache_valid = 0;
+        }
+    }
 
     sys24_tile_ensure_refreshed(st);
 
