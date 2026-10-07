@@ -354,7 +354,7 @@ if(VITA)
   # later edits here unless the build dir is reconfigured from scratch, which
   # defeats the point of bumping it per round of fixes.
   if(NOT DEFINED SEGAMOD2_VITA_BUILD_TAG_OVERRIDE)
-    set(SEGAMOD2_VITA_BUILD_TAG "shadowdiag")
+    set(SEGAMOD2_VITA_BUILD_TAG "shadowdiag2")
   else()
     set(SEGAMOD2_VITA_BUILD_TAG "${SEGAMOD2_VITA_BUILD_TAG_OVERRIDE}")
   endif()
