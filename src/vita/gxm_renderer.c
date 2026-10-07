@@ -682,7 +682,16 @@ int vita_gxm_present(const u32 *bottom, const u32 *priority, int opaque,
     sceGxmSetBackDepthFunc(vita2d_get_context(), SCE_GXM_DEPTH_FUNC_ALWAYS);
     sceGxmSetFrontDepthWriteEnable(vita2d_get_context(), SCE_GXM_DEPTH_WRITE_DISABLED);
     sceGxmSetBackDepthWriteEnable(vita2d_get_context(), SCE_GXM_DEPTH_WRITE_DISABLED);
-    vita2d_clear_screen();
+    if (opaque && hud_x > 0.0f) {
+        /* Tiles-only screens force every g_bottom pixel opaque (see
+         * upload_tiles's !opaque branch), so the center band below is
+         * guaranteed fully overwritten — only the pillarbox bars actually
+         * need the clear color, not the whole 960x544 framebuffer. */
+        vita2d_draw_rectangle(0, 0, hud_x, 544, RGBA8(0, 0, 0, 255));
+        vita2d_draw_rectangle(960.0f - hud_x, 0, hud_x, 544, RGBA8(0, 0, 0, 255));
+    } else {
+        vita2d_clear_screen();
+    }
     vita2d_draw_texture_scale(g_bottom, hud_x, 0, hud_scale, hud_scale);
     if (!opaque) {
         result = draw_geometry(geo_w / SYS24_FB_WIDTH, hud_scale, (960.0f - geo_w) * 0.5f, 0);
