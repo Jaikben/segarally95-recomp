@@ -8,7 +8,9 @@
 
 #ifdef I960_HOST_HAVE_GL
 
-#if defined(__APPLE__)
+#if defined(I960_HOST_VITA_GL)
+#include <vitaGL.h>
+#elif defined(__APPLE__)
 #include <OpenGL/gl.h>
 #else
 #ifdef _WIN32

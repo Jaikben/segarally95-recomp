@@ -3,7 +3,7 @@
 #include "model2_rom.h"
 #include "track_viewer.h"
 #include "sys24_viewer.h"
-#include "gxm_renderer.h"
+#include "vita_gl_renderer.h"
 #include "controls.h"
 #include "frontend.h"
 #include "startup_log.h"
@@ -80,6 +80,7 @@ static int prepare_storage(void)
     return 0;
 }
 
+#if !defined(SEGAMOD2_VITA_AUTOSTART)
 static int start_screen(int error)
 {
     vita_controls_t controls = {0, 1, 1};
@@ -87,13 +88,13 @@ static int start_screen(int error)
     if (error)
         snprintf(g_vita_menu.status, sizeof(g_vita_menu.status), "ROM load failed - fix board dumps, then retry. See vita.log.");
     vita_startup_log("startup: submitting launch menu\n");
-    vita_gxm_menu(0);
+    vita_gl_menu(0);
     vita_startup_log("startup: launch menu submitted; waiting for input\n");
     for (;;) {
         SceCtrlData pad;
         vita_actions_t input;
         vita_menu_action_t action;
-        vita_gxm_menu(0);
+        vita_gl_menu(0);
         if (sceCtrlPeekBufferPositive(0, &pad, 1) <= 0) {
             fprintf(stderr, "lift: Vita startup controller read failed\n");
             return -2;
@@ -111,6 +112,7 @@ static int start_screen(int error)
         sceKernelDelayThread(16000);
     }
 }
+#endif
 
 static int launch_menu(track_viewer_opts_t *opts)
 {
@@ -120,7 +122,7 @@ static int launch_menu(track_viewer_opts_t *opts)
         fprintf(stderr, "lift: Vita analog sampling setup failed\n");
         return -2;
     }
-    if (vita_gxm_open() != 0)
+    if (vita_gl_open() != 0)
         return -2;
     vita_startup_log("startup: loading frontend settings\n");
     if (vita_settings_load(&g_vita_menu.settings, "ux0:data/segamod2/vita.cfg") != 0) {
@@ -134,6 +136,13 @@ static int launch_menu(track_viewer_opts_t *opts)
         fprintf(stderr, "lift: Vita launch options failed\n");
         return -2;
     }
+#if defined(SEGAMOD2_VITA_AUTOSTART)
+    vita_startup_log("startup: autostart enabled; skipping launch menu\n");
+    if (model2_romset_verify() != 0 || model2_rom_load_default() != 0) {
+        fprintf(stderr, "lift: Vita autostart ROM verification/loading failed\n");
+        return -2;
+    }
+#else
     {
         int error = 0;
         for (;;) {
@@ -147,6 +156,7 @@ static int launch_menu(track_viewer_opts_t *opts)
             error = 1;
         }
     }
+#endif
     {
         const u8 *header = model2_rom_at(0x02879db0u);
         char message[128];
@@ -194,20 +204,18 @@ int main(void)
     vita_startup_log("startup: runtime diagnostic build " __DATE__ " " __TIME__ "\n");
     vita_startup_log("startup: boot wait-table terminator fix enabled\n");
     vita_startup_log("startup: incremental tile cache and stack stability fixes enabled\n");
-    vita_startup_log("startup: hashed GXM caches, ordered batches and bounded texture arena enabled\n");
-    vita_startup_log("startup: Daytona-style perspective lattice and solid checker mask enabled\n");
-    vita_startup_log("startup: stable radix painter order and visible-polygon clipping fast paths enabled\n");
+    vita_startup_log("startup: VitaGL OpenGL game renderer enabled\n");
     fprintf(stderr, "lift: Vita startup, data=%s heap=128 MiB\n", data_root);
     rc = launch_menu(&opts);
     if (rc != 0) {
-        vita_gxm_shutdown();
+        vita_gl_shutdown();
         return rc == -1 ? 0 : 1;
     }
-    vita_startup_log("startup: creating guest thread after launch menu\n");
+    vita_startup_log("startup: creating guest thread after launch setup\n");
     rc = pthread_attr_init(&attr);
     if (rc != 0) {
         fprintf(stderr, "lift: Vita main thread attributes failed: %d\n", rc);
-        vita_gxm_shutdown();
+        vita_gl_shutdown();
         return 1;
     }
     rc = pthread_attr_setstacksize(&attr, 1024 * 1024);
@@ -216,13 +224,15 @@ int main(void)
     pthread_attr_destroy(&attr);
     if (rc != 0) {
         fprintf(stderr, "lift: Vita main thread creation failed: %d\n", rc);
-        vita_gxm_shutdown();
+        vita_gl_shutdown();
         return 1;
     }
     rc = pthread_join(thread, &result);
     if (rc != 0) {
         fprintf(stderr, "lift: Vita main thread join failed: %d\n", rc);
+        vita_gl_shutdown();
         return 1;
     }
+    vita_gl_shutdown();
     return (int)(intptr_t)result;
 }

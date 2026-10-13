@@ -25,14 +25,13 @@ include(CheckSymbolExists)
 # The toolchain file sets VITA/BUILD_VITA to True.
 if(VITA)
   include("${VITASDK}/share/vita.cmake" REQUIRED)
-  if(DEFINED SEGAMOD2_VITA_GXM AND NOT SEGAMOD2_VITA_GXM)
-    message(FATAL_ERROR "Vita GL support was removed. Remove the obsolete SEGAMOD2_VITA_GXM option.")
-  endif()
-  unset(SEGAMOD2_VITA_GXM CACHE)
-  find_path(SEGAMOD2_VITA2D_INCLUDE_DIR vita2d.h)
-  find_library(SEGAMOD2_VITA2D_LIBRARY vita2d)
-  if(NOT SEGAMOD2_VITA2D_INCLUDE_DIR OR NOT SEGAMOD2_VITA2D_LIBRARY)
-    message(FATAL_ERROR "Native GXM needs libvita2d: vdpm install libvita2d")
+  option(SEGAMOD2_VITA_AUTOSTART "Skip the Vita launch menu and start the game immediately" OFF)
+  find_path(SEGAMOD2_VITAGL_INCLUDE_DIR vitaGL.h
+    PATHS "${VITASDK}/arm-vita-eabi/include" NO_DEFAULT_PATH)
+  find_library(SEGAMOD2_VITAGL_LIBRARY NAMES vitaGL
+    PATHS "${VITASDK}/arm-vita-eabi/lib" NO_DEFAULT_PATH)
+  if(NOT SEGAMOD2_VITAGL_INCLUDE_DIR OR NOT SEGAMOD2_VITAGL_LIBRARY)
+    message(FATAL_ERROR "VitaGL is required for Vita rendering; install the VitaGL VitaSDK port")
   endif()
 endif()
 
@@ -43,10 +42,6 @@ set(SEGAMOD2_SDL_TARGET "")
 if(VITA)
   find_package(SDL2 CONFIG REQUIRED
     PATHS "${VITASDK}/arm-vita-eabi/lib/cmake/SDL2" NO_DEFAULT_PATH)
-  file(READ "${VITASDK}/arm-vita-eabi/lib/pkgconfig/sdl2.pc" SEGAMOD2_VITA_SDL_PC)
-  if(SEGAMOD2_VITA_SDL_PC MATCHES "-lvitaGL")
-    message(FATAL_ERROR "GXM-only Vita builds require ordinary sdl2, not sdl2_vitagl. Install: vdpm install sdl2")
-  endif()
 else()
   find_package(SDL2 CONFIG QUIET)
 endif()
@@ -107,7 +102,7 @@ if(APPLE AND SEGAMOD2_HAVE_SDL2)
   set(SEGAMOD2_HAVE_GL ON)
 endif()
 if(VITA)
-  set(SEGAMOD2_HAVE_GL OFF)
+  set(SEGAMOD2_HAVE_GL ON)
 endif()
 
 set(HAVE_PTHREAD_H OFF)
@@ -125,10 +120,12 @@ endif()
 # --- Common flags / includes ------------------------------------------------
 add_library(segamod2_common INTERFACE)
 if(VITA)
-  target_compile_definitions(segamod2_common INTERFACE I960_HOST_VITA I960_HOST_VITA_GXM)
-  target_include_directories(segamod2_common INTERFACE ${SEGAMOD2_VITA2D_INCLUDE_DIR})
+  target_compile_definitions(segamod2_common INTERFACE I960_HOST_VITA I960_HOST_VITA_GL)
+  target_include_directories(segamod2_common INTERFACE ${SEGAMOD2_VITAGL_INCLUDE_DIR})
   target_link_libraries(segamod2_common INTERFACE
-    ${SEGAMOD2_VITA2D_LIBRARY} jpeg)
+    ${SEGAMOD2_VITAGL_LIBRARY}
+    stdc++ mathneon vitashark SceShaccCgExt SceShaccCg_stub taihen_stub
+    SceKernelDmacMgr_stub)
 endif()
 target_include_directories(segamod2_common INTERFACE
   ${CMAKE_SOURCE_DIR}/src
@@ -184,7 +181,9 @@ if(SEGAMOD2_HAVE_SDL2)
 endif()
 if(SEGAMOD2_HAVE_GL)
   target_compile_definitions(segamod2_common INTERFACE I960_HOST_HAVE_GL)
-  if(TARGET OpenGL::GL)
+  if(VITA)
+    # VitaGL is linked above and supplies the OpenGL-compatible entry points.
+  elseif(TARGET OpenGL::GL)
     target_link_libraries(segamod2_common INTERFACE OpenGL::GL)
   elseif(APPLE)
     target_link_libraries(segamod2_common INTERFACE "-framework OpenGL")
@@ -275,7 +274,10 @@ add_executable(segamod2
 target_link_libraries(segamod2 PRIVATE
   model2_geo model2_hw model2_tgp model2_snd host_compat)
 if(VITA)
-  target_sources(segamod2 PRIVATE src/vita/gxm_renderer.c src/vita/menu.c src/vita/frontend.c)
+  target_sources(segamod2 PRIVATE src/vita/vita_gl_renderer.c src/vita/menu.c src/vita/frontend.c)
+  if(SEGAMOD2_VITA_AUTOSTART)
+    target_compile_definitions(segamod2 PRIVATE SEGAMOD2_VITA_AUTOSTART)
+  endif()
   target_link_options(segamod2 PRIVATE
     "LINKER:-T,${CMAKE_CURRENT_SOURCE_DIR}/src/vita/sce_padding.ld")
   set_property(TARGET segamod2 APPEND PROPERTY LINK_DEPENDS
@@ -322,14 +324,6 @@ if(SEGAMOD2_BUILD_VITA_TESTS)
   target_include_directories(segamod2_vita_menu_tests PRIVATE src/vita)
   add_test(NAME vita-menu COMMAND segamod2_vita_menu_tests
     "${CMAKE_CURRENT_BINARY_DIR}/vita-settings-test.cfg")
-  add_executable(segamod2_vita_gxm_tests tests/vita_gxm_test.c
-    src/vita/gxm_renderer.c src/vita/menu.c lib/model2/geo/model2_geo_order.c)
-  target_include_directories(segamod2_vita_gxm_tests PRIVATE
-    tests/vita_shim src/vita include lib/model2/geo/include lib/model2/include lib/model2/host)
-  if(UNIX)
-    target_link_libraries(segamod2_vita_gxm_tests PRIVATE m)
-  endif()
-  add_test(NAME vita-gxm COMMAND segamod2_vita_gxm_tests)
 endif()
 
 # --- PS Vita packaging (.self / .vpk) ---------------------------------------

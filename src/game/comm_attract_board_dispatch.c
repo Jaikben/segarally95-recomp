@@ -12,7 +12,7 @@
 
 #include <stdio.h>
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
 #include "vita/startup_log.h"
 #endif
 
@@ -73,7 +73,7 @@ static void comm_attract_inner_tail(void)
     u32 wait;
     u32 handler;
     u32 frame;
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     static unsigned diagnostic_calls;
     int diagnostic_due;
 #endif
@@ -99,7 +99,7 @@ static void comm_attract_inner_tail(void)
 
     /* @0xFD50: jump table index is wait_key (may be forced to 11), not raw inner. */
     handler = comm_inner_handler_for_index(wait_key);
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     diagnostic_due = wait_key == 3u && diagnostic_calls < 3u;
     if (diagnostic_due) {
         char message[160];
@@ -120,7 +120,7 @@ static void comm_attract_inner_tail(void)
     } else {
         i960_st_u32(I960_WORKRAM, 0x20209c, 0, (u32)g14);
     }
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     if (diagnostic_due)
         vita_startup_log("runtime: attract inner3 handler returned\n");
 #endif
@@ -140,17 +140,17 @@ static void comm_attract_inner_tail(void)
         }
     }
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     if (diagnostic_due)
         vita_startup_log("runtime: attract scene hook begin\n");
 #endif
     comm_attract_scene_hook();
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     if (diagnostic_due)
         vita_startup_log("runtime: attract scene hook returned; board frame begin\n");
 #endif
     comm_attract_board_frame(0, 0, 0);
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     if (diagnostic_due)
         vita_startup_log("runtime: attract board frame returned\n");
 #endif

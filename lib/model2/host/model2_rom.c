@@ -4,7 +4,7 @@
 #include "model2_rom_dir.h"
 #include "model2_rom_interleave.h"
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
 #include "vita/startup_log.h"
 #endif
 
@@ -875,7 +875,7 @@ int model2_rom_load_default(void)
                                    MODEL2_ROM_DEFAULT_MAIN_DATA) != 0)
         return -1;
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     vita_startup_log("startup: verifying extracted ROM caches against board dumps\n");
 #endif
     if (model2_rom_file_ok(maincpu_path, MAINCPU_SIZE)
@@ -885,7 +885,7 @@ int model2_rom_load_default(void)
         return -1;
     if (match == 0) {
         fprintf(stderr, "lift: missing or mismatched ROM caches; regenerating from board dumps\n");
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
         vita_startup_log("startup: ROM caches missing or mismatched; regenerating\n");
 #endif
         if (model2_rom_extract_blocks(maincpu_path, main_data_path) != 0)
@@ -896,11 +896,11 @@ int model2_rom_load_default(void)
         }
     }
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     vita_startup_log("startup: ROM cache contents verified; loading images\n");
 #endif
     loaded = model2_rom_load(maincpu_path, main_data_path);
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     vita_startup_log(loaded == 0 ? "startup: verified ROM images loaded\n"
                                 : "startup: verified ROM image load failed\n");
 #endif

@@ -13,7 +13,7 @@
 
 #include <stdio.h>
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
 #include "vita/startup_log.h"
 static unsigned s_vita_inner3_calls;
 static int s_vita_inner3_diagnostic;
@@ -292,7 +292,7 @@ void comm_attract_inner_3(u32 arg0, u32 arg1, u32 arg2)
     (void)arg1;
     (void)arg2;
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     s_vita_inner3_diagnostic = s_vita_inner3_calls < 3u;
     if (s_vita_inner3_diagnostic)
         s_vita_inner3_calls++;

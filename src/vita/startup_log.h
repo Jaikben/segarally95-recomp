@@ -1,7 +1,7 @@
 #ifndef SEGAMOD2_VITA_STARTUP_LOG_H
 #define SEGAMOD2_VITA_STARTUP_LOG_H
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
 #include <psp2/io/fcntl.h>
 #include <psp2/kernel/clib.h>
 #include <string.h>

@@ -21,7 +21,7 @@ You are a build engineer for the PS Vita (VitaSDK) target of this repository (`s
   ```
   Check `$HOME/vitasdk/bin/arm-vita-eabi-gcc` first — skip bootstrap if already present. Persist the exports in `~/.bashrc` for later shells.
 - Package manager is `vdpm` (pacman-based). Install libs with `vdpm install <pkg>` (non-interactive: it still prompts `[Y/n]`, so pipe `yes |` or pass `--noconfirm` via `vdpm pacman -- --noconfirm -S <pkg>` if `vdpm install` hangs waiting for input).
-- GXM-only Vita builds need `vdpm install sdl2 libvita2d libpng zlib`. Configuration rejects `sdl2_vitagl`; replace it with ordinary `sdl2` when upgrading an SDK that used the removed Vita GL frontend. There is no Vita GL renderer-selection option.
+- VitaGL builds need `vdpm install sdl2 vitaGL libpng zlib`.
 - Toolchain file: `$VITASDK/share/vita.toolchain.cmake` — sets CMake variable `VITA` (and `BUILD_VITA`) to `True`, `CMAKE_SYSTEM_NAME` to `Generic` (so `WIN32`/`UNIX`/`APPLE` are all false — guard Vita-only code with `if(VITA)`, not `if(UNIX)`).
 - Packaging helpers come from `$VITASDK/share/vita.cmake` (`include()`d in `CMakeLists.txt` when `VITA`): `vita_create_self(name source UNSAFE)` and `vita_create_vpk(name titleid self VERSION "xx.xx" NAME "...")`. On CMake ≥ 3.20 these macros create **real build targets named `<name>-self` / `<name>-vpk`** (ALL, auto-building) — the plain `<name>` is only the output *file*, not a target you can `--target` build directly.
 
@@ -32,16 +32,16 @@ cmake -S . -B build-vita -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.c
 cmake --build build-vita --target lift -j"$(nproc)"   # lift == lift-vpk == segamod2.vpk-vpk on Vita
 ls build-vita/segamod2.vpk
 ```
-Expect `segamod2: SDL2=ON PNG=TRUE GL=OFF` for native GXM. See the README's Vita section for storage paths, controls and limitations.
+Expect `segamod2: SDL2=ON PNG=TRUE GL=ON` for VitaGL. See the README's Vita section for storage paths, controls and limitations.
 
 ## CMakeLists.txt structure already in place (don't duplicate it)
 - `if(VITA)` after `include(CheckIncludeFile)` includes `vita.cmake`.
-- `I960_HOST_VITA` and `I960_HOST_VITA_GXM` are always defined for Vita. The build links libvita2d and ordinary SDL2, and disables `I960_HOST_HAVE_GL`. No vitaGL or runtime shader-compiler libraries are linked.
+- `I960_HOST_VITA` and `I960_HOST_VITA_GL` are defined for Vita. The build links VitaGL and SDL2, and enables `I960_HOST_HAVE_GL`; SDL video is not initialized.
 - SDL2 branch adds the full Sce stub-lib list from `sdl2.pc`'s `Libs:` line (display/ctrl/touch/audio/etc.) under `if(VITA)` since the imported `SDL2::SDL2-static` CMake target has no `INTERFACE_LINK_LIBRARIES` for them.
 - `m` (libm) is linked under `if(UNIX OR VITA)`.
 - `segamod2.self`/`segamod2.vpk` packaging + a stable `lift-vpk` alias target are created under `if(VITA)`, right after `add_executable(segamod2 ...)`.
 - The `lift-boot-*`/`lift-cgm-decode` targets that execute `$<TARGET_FILE:segamod2>` directly are wrapped in `if(NOT VITA)` — a cross-compiled ARM ELF can't run on the build host.
-- `lib/host_compat/model2_gl.h` is desktop-only; Vita never includes OpenGL headers.
+- `lib/host_compat/model2_gl.h` loads extension functions on Windows and uses the OpenGL headers supplied by VitaGL on Vita.
 - `src/host/sys24_viewer_record.c` (ffmpeg-via-`popen` screen recorder) is stubbed out under `I960_HOST_VITA` the same way it already is for `_WIN32` (no `popen`/ffmpeg on Vita).
 
 ## Approach for new build failures
@@ -56,10 +56,9 @@ Expect `segamod2: SDL2=ON PNG=TRUE GL=OFF` for native GXM. See the README's Vita
 Report: VitaSDK install status (bootstrapped vs already present), the exact configure status line (SDL2/PNG/GL), any CMakeLists.txt or source edits made (file + one-line reason), final build exit code, and the resulting `build-vita/segamod2.vpk` path + size. Call out anything stubbed/disabled for Vita (e.g. video recording) so it's not mistaken for a real port of that feature.
 
 ## Rendering / input / threading layer already implemented (compile-verified only — never run on real hardware)
-- Native GXM uses `src/vita/main.c` instead of the generated desktop entry point, a 128 MiB heap, a 1 MiB guest-loop thread stack, and writable `ux0:data/segamod2/` storage. The renderer is `src/vita/gxm_renderer.c`; SDL video is not initialized. Native controls use `sceCtrl`, with a Start+Select pause chord and button-release gating.
+- VitaGL uses `src/vita/main.c` instead of the generated desktop entry point, a 128 MiB heap, a 1 MiB guest-loop thread stack, and writable `ux0:data/segamod2/` storage. `src/vita/vita_gl_renderer.c` uses the minimal Daytona-style VitaGL lifecycle (surface init, viewport, initial clear, and swaps); launch/pause menus are CPU-rasterized and displayed as a texture quad. Configure with `-DSEGAMOD2_VITA_AUTOSTART=ON` to skip the launch menu after ROM verification/loading. `src/host/sys24_viewer.c` uses the shared OpenGL compositor for the game. SDL video is not initialized. Native controls use `sceCtrl`, with a Start+Select pause chord and button-release gating.
 - `src/host/sys24_viewer.c` uses native Vita controls: Select=coin, Start=start, Triangle=test, Circle=service, L/R=H-shifter down/up, D-pad=test-menu navigation, left stick X=steer, Cross=throttle, Square=brake. There is no SDL controller/window frontend on Vita.
 - Explicit `pthread_attr_setstacksize` added for the geo decode worker (256KiB, `lib/model2/geo/model2_geo_render.c`) and sound board thread (128KiB, `lib/model2/snd/model2_snd.c`) since vitasdk's default pthread stack size couldn't be confirmed. The vsync timer thread never starts while the live viewer is active, so it was left untouched.
 - There is **no** vitasdk C global (unlike PSP's `PSP_MAIN_THREAD_STACK_SIZE`) to bump the main thread's stack — confirmed by inspecting `crt0.o`'s relocations, it just calls `main()` directly with whatever stack the kernel assigns. If hardware testing reveals a main-thread stack overflow, the fix is moving the heavy loop into a dedicated thread with an explicit large stack, not editing a global.
-- Native GXM uses libvita2d's built-in shaders; `libshacccg.suprx` is not required.
-- Native GXM uses approximate perspective tessellation, painter ordering and half-alpha checker polygons, not an exact replacement of desktop GL depth/stencil behavior. Run host tests with `-DSEGAMOD2_BUILD_VITA_TESTS=ON` and `ctest --test-dir build -R '^vita-' --output-on-failure`; shim tests do not validate actual GPU execution.
+- VitaGL uses the project's existing OpenGL geometry shaders and tile compositor. Host tests with `-DSEGAMOD2_BUILD_VITA_TESTS=ON` cover CPU-side helpers only; they do not validate VitaGL shader compilation or GPU execution.
 - None of the rendering/input/threading behavior has been validated on a real Vita or emulator (not available in this environment) — only that it compiles and links. Flag this clearly to the user rather than implying hardware-verified behavior.

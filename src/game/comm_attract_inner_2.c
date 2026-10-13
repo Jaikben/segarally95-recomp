@@ -12,7 +12,7 @@
 
 #include <stdio.h>
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
 #include "vita/startup_log.h"
 #include "vita/rom_diagnostic.h"
 #include <string.h>
@@ -188,12 +188,12 @@ void comm_attract_inner_2(u32 arg0, u32 arg1, u32 arg2)
     g2 = catalog_addr;
     g3 = 0;
     g4 = 1;
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     vita_rom_diagnostic("before splash catalog");
 #endif
     g0 = catalog_draw_setup((u32)g0, (u32)g1, (u32)g2);
     i960_st_u32(I960_WORKRAM, 0x20a7a4, 0, (u32)g0);
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     vita_splash_diagnostic(catalog_addr, (u32)g0);
 #endif
 

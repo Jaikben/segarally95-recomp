@@ -15,7 +15,7 @@
 #include "sys24_viewer.h"
 #include "lift_log.h"
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
 #include "../vita/startup_log.h"
 #include "../vita/rom_diagnostic.h"
 #endif
@@ -58,7 +58,7 @@ int i960_lift_boot_screen_run(const track_viewer_opts_t *opts)
 
     dump = opts->palette_dump;
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     vita_startup_log("startup: configuring boot environment\n");
 #endif
     lift_status(
@@ -111,7 +111,7 @@ int i960_lift_boot_screen_run(const track_viewer_opts_t *opts)
 
     i960_host_trace_init();
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     vita_startup_log("startup: boot environment ready; initializing geometry\n");
 #endif
     /*
@@ -126,30 +126,30 @@ int i960_lift_boot_screen_run(const track_viewer_opts_t *opts)
     }
 
     /* Load battery-backed SRAM + COUNTRY/coin options before cold boot. */
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     vita_startup_log("startup: geometry initialization finished; loading NVRAM\n");
     vita_rom_diagnostic("after geometry");
 #endif
     (void)model2_nvram_load(NULL);
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     vita_startup_log("startup: NVRAM load finished; opening game viewer\n");
 #endif
     if (opts->live_view && sys24_viewer_open("Sega Rally Championship 95 Arcade") != 0)
         return 1;
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     vita_startup_log("startup: game viewer ready; presenting initial frame\n");
     vita_rom_diagnostic("after viewer open");
 #endif
     if (opts->live_view)
         i960_host_frame_present();
 
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     vita_startup_log("startup: initial frame finished; entering guest boot entry\n");
     vita_rom_diagnostic("after initial frame");
 #endif
     boot_entry_host(0, 0, 0);
-#if defined(I960_HOST_VITA_GXM)
+#if defined(I960_HOST_VITA)
     vita_startup_log("startup: guest boot entry returned; entering post-reset dispatch\n");
     vita_rom_diagnostic("after boot entry");
 #endif

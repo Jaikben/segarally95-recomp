@@ -86,6 +86,8 @@ static void test_menu(void)
         vita_menu_label(&m, i, 1, text, sizeof(text));
         CHECK(text[0] && strlen(text) < sizeof(text) - 1);
     }
+    vita_menu_label(&m, 7, 1, text, sizeof(text));
+    CHECK(!strcmp(text, "GRAPHICS API: VITAGL"));
 }
 
 static void test_steer(void)

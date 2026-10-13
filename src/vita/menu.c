@@ -211,7 +211,7 @@ vita_menu_action_t vita_menu_update(vita_menu_t *m, unsigned pressed, int have_g
         break;
     case 5: m->settings.invert = !m->settings.invert; a.changed = 1; break;
     case 6: snprintf(m->status, sizeof(m->status), "Audio: existing SDL / 68K + SCSP engine."); break;
-    case 7: snprintf(m->status, sizeof(m->status), "Native GXM, 960 x 544, original aspect ratio."); break;
+    case 7: snprintf(m->status, sizeof(m->status), "VitaGL OpenGL, 960 x 544, original aspect ratio."); break;
     case 8: snprintf(m->status, sizeof(m->status), "Board dumps: ux0:data/segamod2/ROMS/srallyc-b/"); break;
     case 9: snprintf(m->status, sizeof(m->status), "Stick: steer  X: gas  Square: brake  L/R: shift"); break;
     case 10: if (activate) { a.test = a.resume = have_game; } break;
@@ -227,7 +227,7 @@ vita_menu_action_t vita_menu_update(vita_menu_t *m, unsigned pressed, int have_g
 void vita_menu_label(const vita_menu_t *m, int row, int have_game, char *text, unsigned size)
 {
     static const char *const main_labels[] = {"START GAME", "RESET GAME", "OPTIONS", "SAVE AND QUIT"};
-    static const char *const fixed[] = {"AUDIO ENGINE: SDL / SCSP", "GRAPHICS API: GXM",
+    static const char *const fixed[] = {"AUDIO ENGINE: SDL / SCSP", "GRAPHICS API: VITAGL",
         "ROM: SRALLYC-B BOARD DUMPS", "BINDINGS: VITA FIXED",
         "ENTER TEST MENU", "SERVICE COIN", "RESET DEFAULTS", "BACK"};
     const vita_settings_t *s = &m->settings;
