@@ -1,1 +1,51 @@
+name: Build Vita VPK
+
+on:
+  workflow_dispatch:   # lets you tap "Run workflow" from your phone
+  push:
+    paths:
+      - "src/**"
+      - "lib/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/build-vita.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build git python3 curl xz-utils
+
+      - name: Install VitaSDK
+        run: |
+          git clone --depth 1 https://github.com/vitasdk/vdpm.git /tmp/vdpm
+          /tmp/vdpm/bootstrap-vitasdk.sh --install-dir "$HOME/vitasdk"
+          echo "VITASDK=$HOME/vitasdk" >> "$GITHUB_ENV"
+          echo "$HOME/vitasdk/bin" >> "$GITHUB_PATH"
+
+      - name: Install Vita libraries
+        run: |
+          export VITASDK="$HOME/vitasdk"
+          export PATH="$VITASDK/bin:$PATH"
+          yes | vdpm install sdl2 vitaGL libpng zlib
+
+      - name: Configure (autostart build)
+        run: |
+          cmake -G Ninja -S . -B build-vita \
+            -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSEGAMOD2_VITA_AUTOSTART=ON
+
+      - name: Build VPK
+        run: cmake --build build-vita --target lift-vpk --parallel 4
+
+      - name: Upload VPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: segamod2-vpk
+          path: build-vita/segamod2.vpk
 
