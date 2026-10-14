@@ -42,12 +42,24 @@ void game_dispatch_main(u32 arg0, u32 arg1, u32 arg2)
     (void)a2;
     g1 = (uintptr_t)arg1;
 
+#if defined(I960_HOST_VITA)
+    vita_startup_log("runtime: game_dispatch_main entered\n");
+#endif
     game_irq_wr_stub(0, 0);
     game_comm_aa24_seed(0, 0);
     i960_st_u32(I960_WORKRAM, 0x202094, 0, (u32)g14);
     game_workram_bx_stub(0, 0);
+#if defined(I960_HOST_VITA)
+    vita_startup_log("runtime: staging init begin\n");
+#endif
     game_staging_init(0, 0, 0);
+#if defined(I960_HOST_VITA)
+    vita_startup_log("runtime: subsys init begin\n");
+#endif
     game_subsys_init_stub(0, 0, 0);
+#if defined(I960_HOST_VITA)
+    vita_startup_log("runtime: cold boot init begin\n");
+#endif
     game_cold_boot_init(0, 0, 0);
 #if defined(I960_HOST_VITA)
     vita_rom_diagnostic("after cold boot");

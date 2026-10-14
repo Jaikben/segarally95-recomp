@@ -127,6 +127,29 @@ extern PFN_model2_glUniform2f model2_glUniform2f;
 
 #endif /* _WIN32 */
 
+#if defined(I960_HOST_VITA_GL)
+/*
+ * VitaGL immediate-mode shim: glBegin/glEnd crash on device, so vertices are
+ * batched on the CPU and drawn with client-array glDrawArrays at glEnd.
+ * GL_QUADS is split into triangles.
+ */
+void model2_vita_glBegin(GLenum mode);
+void model2_vita_glEnd(void);
+void model2_vita_glVertex2f(GLfloat x, GLfloat y);
+void model2_vita_glVertex3f(GLfloat x, GLfloat y, GLfloat z);
+void model2_vita_glColor3f(GLfloat r, GLfloat g, GLfloat b);
+void model2_vita_glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a);
+void model2_vita_glTexCoord2f(GLfloat s, GLfloat t);
+
+#define glBegin model2_vita_glBegin
+#define glEnd model2_vita_glEnd
+#define glVertex2f model2_vita_glVertex2f
+#define glVertex3f model2_vita_glVertex3f
+#define glColor3f model2_vita_glColor3f
+#define glColor4f model2_vita_glColor4f
+#define glTexCoord2f model2_vita_glTexCoord2f
+#endif
+
 #endif /* I960_HOST_HAVE_GL */
 
 int model2_gl_load(void);

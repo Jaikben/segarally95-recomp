@@ -6,6 +6,10 @@
 #include "i960_host.h"
 #include "model2_rom.h"
 #include "i960_mem.h"
+#if defined(I960_HOST_VITA)
+#include "vita/startup_log.h"
+#include <stdio.h>
+#endif
 
 /* @rom 0x5c0 — flushreg + seed prior-frame slots before callx dispatch loop */
 static void post_reset_flushreg(void)
@@ -38,6 +42,16 @@ u32 post_reset_dispatch(u32 arg0, u32 arg1, u32 arg2)
         if (i960_host_dispatch_halted())
             break;
         g4 = i960_ld_u32(I960_ROM, 0x1000, 0);
+#if defined(I960_HOST_VITA)
+        {
+            static unsigned n;
+            if (n++ < 4) {
+                char m[80];
+                snprintf(m, sizeof(m), "runtime: post-reset call %u target=0x%08x\n", n, (unsigned)g4);
+                vita_startup_log(m);
+            }
+        }
+#endif
         i960_call_indirect(g4);
     }
     return 0;

@@ -25,7 +25,7 @@ include(CheckSymbolExists)
 # The toolchain file sets VITA/BUILD_VITA to True.
 if(VITA)
   include("${VITASDK}/share/vita.cmake" REQUIRED)
-  option(SEGAMOD2_VITA_AUTOSTART "Skip the Vita launch menu and start the game immediately" OFF)
+  option(SEGAMOD2_VITA_AUTOSTART "Skip the Vita launch menu and start the game immediately" ON)
   find_path(SEGAMOD2_VITAGL_INCLUDE_DIR vitaGL.h
     PATHS "${VITASDK}/arm-vita-eabi/include" NO_DEFAULT_PATH)
   find_library(SEGAMOD2_VITAGL_LIBRARY NAMES vitaGL

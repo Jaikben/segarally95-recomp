@@ -127,7 +127,7 @@ int vita_gl_open(void)
 
     vita_startup_log("startup: VitaGL initialization begin (4x MSAA)\n");
     vglInitExtended(0, VITA_GL_WIDTH, VITA_GL_HEIGHT, VITA_GL_VRAM_BUDGET,
-                    SCE_GXM_MULTISAMPLE_4X);
+                    SCE_GXM_MULTISAMPLE_NONE);
     vita_startup_log("startup: VitaGL surface initialized\n");
     glViewport(0, 0, VITA_GL_WIDTH, VITA_GL_HEIGHT);
     glClearColor(0.f, 0.f, 0.f, 1.f);
@@ -149,18 +149,51 @@ int vita_gl_open(void)
 
 void vita_gl_swap_buffers(void)
 {
-    if (g_initialized)
-        vglSwapBuffers(GL_FALSE);
+    static unsigned err_logged;
+    GLenum e;
+
+    if (!g_initialized)
+        return;
+    while ((e = glGetError()) != GL_NO_ERROR) {
+        if (err_logged < 20u) {
+            char msg[64];
+
+            snprintf(msg, sizeof(msg), "GL error 0x%04x before swap\n", (unsigned)e);
+            vita_startup_log(msg);
+            err_logged++;
+        }
+    }
+    vglSwapBuffers(GL_FALSE);
+}
+
+static void present_menu_pixels(void);
+
+void vita_gl_message(const char *text)
+{
+    static const uint8_t background[4] = {12, 16, 24, 255};
+    static const uint8_t accent[4] = {244, 180, 58, 255};
+    static const uint8_t white[4] = {235, 235, 235, 255};
+
+    if (!g_initialized)
+        return;
+    fill_rect(0, 0, VITA_MENU_WIDTH, VITA_MENU_HEIGHT, background);
+    draw_text(16, 10, "SEGA RALLY RECOMP", accent);
+    draw_text(16, 120, text, white);
+    present_menu_pixels();
 }
 
 void vita_gl_menu(int have_game)
 {
-    int diagnose = g_menu_diagnostics;
-
     if (!g_initialized)
         return;
-
     build_menu_pixels(have_game);
+    present_menu_pixels();
+}
+
+static void present_menu_pixels(void)
+{
+    int diagnose = g_menu_diagnostics;
+
     if (diagnose)
         vita_startup_log("menu diagnostic: bitmap rasterized\n");
     glBindTexture(GL_TEXTURE_2D, g_menu_texture);

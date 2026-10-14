@@ -17,7 +17,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
+#if defined(I960_HOST_VITA)
+#include "vita/startup_log.h"
+#endif
 #define VIDEO_CTL_BIT2  (1u << 2)
 
 static pthread_mutex_t g_vsync_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -342,6 +344,15 @@ void model2_hw_vsync_wait_bit2_toggle(unsigned latched_bit2)
 
     if (vsync_use_sdl_clock()) {
         log_vsync_timing_once();
+#if defined(I960_HOST_VITA)
+        {
+            static unsigned s_n;
+            if (s_n < 4) {
+                s_n++;
+                vita_startup_log("runtime: vsync flip begin\n");
+            }
+        }
+#endif
         /*
          * One SDL SwapWindow == one game frame (game_mode_apply calls geo_vsync_wait
          * once per main loop). HW may need 1–2 emulated vblanks for videoctl bit 2

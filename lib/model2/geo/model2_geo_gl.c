@@ -412,6 +412,336 @@ static void draw_solid_elements(const float *xyzuv, const unsigned char *rgb_by_
     glDisableClientState(GL_VERTEX_ARRAY);
 }
 
+#if defined(I960_HOST_VITA_GL)
+/*
+ * VitaGL path: no GLSL, no stencil fillmap, no 32-bit indices. Each
+ * (sheet patch, palette) pair is baked on the CPU into a small RGBA texture;
+ * mirror/wrap use GL_MIRRORED_REPEAT/GL_REPEAT, cutouts use alpha test.
+ */
+#ifndef GL_MIRRORED_REPEAT
+#define GL_MIRRORED_REPEAT 0x8370
+#endif
+
+enum { VTEX_CAP = 160 };
+
+static void vita_gl_check(const char *stage);
+
+typedef struct {
+    u16 colorbase, lumabase;
+    u8 sheet, flags, luma;
+    u16 px, py, pw, ph;
+    GLuint tex;
+    int used;
+} vtex_ent_t;
+
+static vtex_ent_t g_vtex[VTEX_CAP];
+static unsigned g_vtex_n, g_vtex_clock;
+static u8 *g_cpu_sheet[2];
+static u32 g_cpu_sheet_gen = 0xffffffffu;
+static u32 g_vtex_palette_sig = 0xffffffffu;
+
+static void vtex_clear(void)
+{
+    unsigned i;
+
+    for (i = 0; i < g_vtex_n; i++)
+        if (g_vtex[i].used)
+            glDeleteTextures(1, &g_vtex[i].tex);
+    memset(g_vtex, 0, sizeof(g_vtex));
+    g_vtex_n = 0;
+    g_vtex_clock = 0;
+}
+
+static int vtex_refresh_sheets(void)
+{
+    u32 gen = model2_tex_sheets_dirty_gen();
+    unsigned s;
+
+    if (g_cpu_sheet[0] && gen == g_cpu_sheet_gen)
+        return 0;
+    for (s = 0; s < 2u; s++) {
+        const u32 *bank = model2_tex_sheet_bank(s);
+
+        if (!g_cpu_sheet[s]) {
+            g_cpu_sheet[s] = (u8 *)calloc(
+                    (size_t)MODEL2_GEO_SHEET_W * MODEL2_GEO_SHEET_H, 1);
+            if (!g_cpu_sheet[s])
+                return -1;
+        }
+        if (bank)
+            model2_decode_sheet_indices(bank, g_cpu_sheet[s]);
+    }
+    g_cpu_sheet_gen = gen;
+    vtex_clear();
+    lift_log("lift: vita geo sheets decoded gen=%u\n", (unsigned)gen);
+    return 0;
+}
+
+static unsigned vtex_dim(unsigned v)
+{
+    return v ? v : 32u;
+}
+
+static GLuint vtex_get(const model2_geo_tri_mat_t *m)
+{
+    unsigned i, pw = vtex_dim(m->patch_w), ph = vtex_dim(m->patch_h);
+    unsigned x, y;
+    const u8 *sheet;
+    u8 lut[16 * 4];
+    u8 *px;
+    GLuint tex;
+    vtex_ent_t *ent;
+
+    for (i = 0; i < g_vtex_n; i++) {
+        const vtex_ent_t *e = &g_vtex[i];
+
+        if (e->used && e->colorbase == m->colorbase && e->lumabase == m->lumabase
+            && e->sheet == m->sheet && e->flags == m->flags && e->luma == m->luma
+            && e->px == m->patch_x && e->py == m->patch_y && e->pw == pw
+            && e->ph == ph)
+            return e->tex;
+    }
+
+    sheet = g_cpu_sheet[m->sheet & 1u];
+    if (!sheet)
+        return 0;
+    model2_palette_build_texel_lut(m->colorbase, m->lumabase, m->luma,
+                                   (m->flags & MODEL2_GEO_TEX_CUTOUT) ? 1 : 0, lut);
+    px = (u8 *)malloc((size_t)pw * ph * 4u);
+    if (!px)
+        return 0;
+    for (y = 0; y < ph; y++) {
+        const u8 *row = sheet + (size_t)((m->patch_y + y) & (MODEL2_GEO_SHEET_H - 1))
+                                * MODEL2_GEO_SHEET_W;
+
+        for (x = 0; x < pw; x++) {
+            unsigned idx = row[(m->patch_x + x) & (MODEL2_GEO_SHEET_W - 1)] & 15u;
+
+            memcpy(&px[((size_t)y * pw + x) * 4u], &lut[idx * 4u], 4u);
+        }
+    }
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)pw, (GLsizei)ph, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, px);
+    free(px);
+    vita_gl_check("texture upload");
+
+    if (g_vtex_n < VTEX_CAP) {
+        ent = &g_vtex[g_vtex_n++];
+    } else {
+        ent = &g_vtex[g_vtex_clock++ % VTEX_CAP];
+        glDeleteTextures(1, &ent->tex);
+    }
+    ent->colorbase = m->colorbase;
+    ent->lumabase = m->lumabase;
+    ent->sheet = m->sheet;
+    ent->flags = m->flags;
+    ent->luma = m->luma;
+    ent->px = m->patch_x;
+    ent->py = m->patch_y;
+    ent->pw = (u16)pw;
+    ent->ph = (u16)ph;
+    ent->tex = tex;
+    ent->used = 1;
+    return tex;
+}
+
+static void vita_gl_check(const char *stage)
+{
+    static unsigned logged;
+    GLenum e;
+
+    while ((e = glGetError()) != GL_NO_ERROR) {
+        if (logged < 40u) {
+            lift_log("lift: vita GL error 0x%04x after %s\n", (unsigned)e, stage);
+            logged++;
+        }
+    }
+}
+
+static void vita_draw_run(unsigned begin, unsigned end,
+                          const model2_geo_tri_mat_t *mats)
+{
+    unsigned t, run_start = begin;
+
+    if (begin >= end)
+        return;
+    for (t = begin + 1u; t <= end; t++) {
+        const model2_geo_tri_mat_t *b;
+
+        if (t < end && mat_same(&mats[g_order[run_start]], &mats[g_order[t]]))
+            continue;
+        b = &mats[g_order[run_start]];
+        if (b->flags & MODEL2_GEO_TEX_TEXTURED) {
+            GLuint tex = vtex_get(b);
+
+            if (tex) {
+                glEnable(GL_TEXTURE_2D);
+                glBindTexture(GL_TEXTURE_2D, tex);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
+                                (b->flags & MODEL2_GEO_TEX_MIRROR_X)
+                                        ? GL_MIRRORED_REPEAT : GL_REPEAT);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,
+                                (b->flags & MODEL2_GEO_TEX_MIRROR_Y)
+                                        ? GL_MIRRORED_REPEAT : GL_REPEAT);
+                glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+                if (b->flags & MODEL2_GEO_TEX_CUTOUT) {
+                    glEnable(GL_ALPHA_TEST);
+                    glAlphaFunc(GL_GREATER, 0.5f);
+                } else {
+                    glDisable(GL_ALPHA_TEST);
+                }
+            } else {
+                glDisable(GL_TEXTURE_2D);
+                glDisable(GL_ALPHA_TEST);
+            }
+        } else {
+            glDisable(GL_TEXTURE_2D);
+            glDisable(GL_ALPHA_TEST);
+        }
+        glDrawArrays(GL_TRIANGLES, (GLint)(run_start * 3u),
+                     (GLsizei)((t - run_start) * 3u));
+        vita_gl_check((b->flags & MODEL2_GEO_TEX_TEXTURED) ? "draw textured batch"
+                                                          : "draw solid batch");
+        run_start = t;
+    }
+}
+
+static void vita_draw_textured(const float *xyzuv, const model2_geo_tri_mat_t *mats,
+                               unsigned ntris)
+{
+    static float *vpos, *vuv;
+    static unsigned char *vcol;
+    static unsigned cap;
+    static int logged;
+    unsigned t, k;
+    unsigned world_end = 0, solid_end = 0, opaque_end = 0;
+    u32 psig;
+    u8 rgb[3] = {170, 170, 170};
+    u16 last_cb = 0xffffu, last_lb = 0xffffu;
+    u8 last_luma = 0xffu;
+    int have_rgb = 0;
+
+    if (ensure_scratch(ntris) != 0)
+        return;
+    if (ntris * 3u > cap) {
+        free(vpos);
+        free(vuv);
+        free(vcol);
+        cap = ntris * 3u;
+        vpos = (float *)malloc((size_t)cap * 3u * sizeof(float));
+        vuv = (float *)malloc((size_t)cap * 2u * sizeof(float));
+        vcol = (unsigned char *)malloc((size_t)cap * 4u);
+        if (!vpos || !vuv || !vcol) {
+            free(vpos);
+            free(vuv);
+            free(vcol);
+            vpos = vuv = NULL;
+            vcol = NULL;
+            cap = 0;
+            return;
+        }
+    }
+    if (vtex_refresh_sheets() != 0)
+        return;
+    psig = model2_palette_state_sig();
+    if (psig != g_vtex_palette_sig) {
+        vtex_clear();
+        g_vtex_palette_sig = psig;
+    }
+
+    for (t = 0; t < ntris; t++)
+        g_order[t] = t;
+    g_sort_mats = mats;
+    qsort(g_order, ntris, sizeof(unsigned), mat_order_cmp);
+
+    for (t = 0; t < ntris; t++) {
+        const model2_geo_tri_mat_t *m = &mats[g_order[t]];
+        int textured = (m->flags & MODEL2_GEO_TEX_TEXTURED) != 0;
+        float inv_w = 1.f / (float)vtex_dim(m->patch_w);
+        float inv_h = 1.f / (float)vtex_dim(m->patch_h);
+
+        if (!textured
+            && (!have_rgb || m->colorbase != last_cb || m->lumabase != last_lb
+                || m->luma != last_luma)) {
+            model2_palette_lookup_solid(m->colorbase, m->luma, rgb);
+            last_cb = m->colorbase;
+            last_lb = m->lumabase;
+            last_luma = m->luma;
+            have_rgb = 1;
+        }
+        for (k = 0; k < 3u; k++) {
+            unsigned v = g_order[t] * 3u + k;
+            unsigned o = t * 3u + k;
+
+            vpos[o * 3u + 0u] = xyzuv[v * 5u + 0u];
+            vpos[o * 3u + 1u] = xyzuv[v * 5u + 1u];
+            vpos[o * 3u + 2u] = xyzuv[v * 5u + 2u];
+            vuv[o * 2u + 0u] = textured ? xyzuv[v * 5u + 3u] * inv_w : 0.f;
+            vuv[o * 2u + 1u] = textured ? xyzuv[v * 5u + 4u] * inv_h : 0.f;
+            vcol[o * 4u + 0u] = textured ? 255u : rgb[0];
+            vcol[o * 4u + 1u] = textured ? 255u : rgb[1];
+            vcol[o * 4u + 2u] = textured ? 255u : rgb[2];
+            vcol[o * 4u + 3u] = 255u;
+        }
+    }
+
+    while (world_end < ntris && !(mats[g_order[world_end]].pad & 1u))
+        world_end++;
+    while (solid_end < world_end
+           && !(mats[g_order[solid_end]].flags & MODEL2_GEO_TEX_TEXTURED))
+        solid_end++;
+    opaque_end = solid_end;
+    while (opaque_end < world_end
+           && (mats[g_order[opaque_end]].flags & MODEL2_GEO_TEX_TEXTURED)
+           && !(mats[g_order[opaque_end]].flags & MODEL2_GEO_TEX_CUTOUT))
+        opaque_end++;
+
+    if (!logged) {
+        lift_log("lift: vita geo textured tris=%u solid=%u opaque_tex=%u cutout=%u\n",
+                 ntris, solid_end, opaque_end - solid_end, world_end - opaque_end);
+        logged = 1;
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDisable(GL_BLEND);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_COLOR_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_NORMAL_ARRAY);
+    glVertexPointer(3, GL_FLOAT, 0, vpos);
+    glColorPointer(4, GL_UNSIGNED_BYTE, 0, vcol);
+    glTexCoordPointer(2, GL_FLOAT, 0, vuv);
+    vita_gl_check("geo state setup");
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDepthFunc(GL_LESS);
+    vita_draw_run(0, solid_end, mats);
+    glDepthFunc(GL_LEQUAL);
+    vita_draw_run(solid_end, opaque_end, mats);
+    glDepthMask(GL_FALSE);
+    vita_draw_run(opaque_end, world_end, mats);
+    glDisable(GL_DEPTH_TEST);
+    vita_draw_run(world_end, ntris, mats);
+
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_TEXTURE_2D);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_COLOR_ARRAY);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDepthFunc(GL_LEQUAL);
+}
+#endif /* I960_HOST_VITA_GL */
+
 void model2_geo_gl_draw_textured(const float *xyzuv, unsigned nverts,
                                  const model2_geo_tri_mat_t *mats, unsigned ntris)
 {
@@ -423,6 +753,10 @@ void model2_geo_gl_draw_textured(const float *xyzuv, unsigned nverts,
 
     if (!xyzuv || !mats || ntris == 0 || nverts < 3u)
         return;
+#if defined(I960_HOST_VITA_GL)
+    vita_draw_textured(xyzuv, mats, ntris);
+    return;
+#endif
     if (!g_ready)
         model2_geo_gl_tex_init();
     if (ensure_scratch(ntris) != 0)

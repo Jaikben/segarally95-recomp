@@ -138,10 +138,14 @@ static int launch_menu(track_viewer_opts_t *opts)
     }
 #if defined(SEGAMOD2_VITA_AUTOSTART)
     vita_startup_log("startup: autostart enabled; skipping launch menu\n");
+    vita_gl_message("LOADING ROMS...");
     if (model2_romset_verify() != 0 || model2_rom_load_default() != 0) {
+        vita_gl_message("ROM LOAD FAILED - SEE VITA.LOG");
+        sceKernelDelayThread(4000000);
         fprintf(stderr, "lift: Vita autostart ROM verification/loading failed\n");
         return -2;
     }
+    vita_startup_log("startup: autostart ROMs ready\n");
 #else
     {
         int error = 0;
@@ -168,6 +172,7 @@ static int launch_menu(track_viewer_opts_t *opts)
         vita_startup_log(message);
     }
     vita_rom_diagnostic("loaded");
+    vita_startup_log("startup: launch setup complete\n");
     return 0;
 }
 

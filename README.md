@@ -96,29 +96,30 @@ cmake -S . -B build-vita \
 cmake --build build-vita --target lift --parallel 4
 ```
 
-CMake should report `segamod2: SDL2=ON PNG=TRUE GL=ON`. Install
-`build-vita/segamod2.vpk` with VitaShell for the visible launch menu. Supply
+CMake should report `segamod2: SDL2=ON PNG=TRUE GL=ON`. By default,
+`build-vita/segamod2.vpk` starts the game directly after verifying and loading
+the ROM set, without a launch menu. Install it with VitaShell. Supply
 your complete, legally obtained **unpacked srallyc-b board dumps** under
 `ux0:data/segamod2/ROMS/srallyc-b/` (not Daytona's ZIP layout). Existing ROM
 verification and extraction are reused; generated caches go under
 `ux0:data/segamod2/out/i960/`. No ROMs are packaged.
 
-To build a second VPK that skips the launch UI and verifies/loads the ROM set
-immediately, configure a separate build directory with
-`-DSEGAMOD2_VITA_AUTOSTART=ON`; it exits with an error if ROM verification or
-loading fails:
+The direct-start build exits with an error if ROM verification or loading
+fails. To build the optional launch-menu version, configure a separate build
+directory with `-DSEGAMOD2_VITA_AUTOSTART=OFF`:
 
 ```sh
 cmake -G Ninja -S . -B build-vita-autostart-ninja \
   -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DSEGAMOD2_VITA_AUTOSTART=ON
+  -DSEGAMOD2_VITA_AUTOSTART=OFF
 cmake --build build-vita-autostart-ninja --target lift-vpk --parallel 4
 ```
 
 Extracted CPU/data caches are compared byte-for-byte with their source board
 dumps at launch. Missing or mismatched caches are regenerated and checked
-again; I/O or verification failures return to the ROM retry screen.
+again. In launch-menu builds, I/O or verification failures return to the ROM
+retry screen.
 
 `ux0:data/segamod2/vita.log` is replaced at launch. NVRAM is stored in
 `ux0:data/segamod2/nvram.yaml`, saved every five seconds, on pause/resume and

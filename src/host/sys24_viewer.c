@@ -19,6 +19,11 @@
 #include "../vita/controls.h"
 #include "../vita/frontend.h"
 #include <psp2/ctrl.h>
+#include "../vita/startup_log.h"
+static unsigned g_flip_log_count;
+#define FLIP_LOG(s) do { if (g_flip_log_count < 40u) { g_flip_log_count++; vita_startup_log("runtime: flip " s "\n"); } } while (0)
+#else
+#define FLIP_LOG(s) ((void)0)
 #endif
 
 extern int model2_snd_host_audio_open(void);
@@ -368,7 +373,7 @@ int sys24_viewer_open(const char *title)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, SYS24_FB_WIDTH, SYS24_FB_HEIGHT, 0,
-                 GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, NULL);
+                 GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     if (!g_tile_tex || glGetError() != GL_NO_ERROR) {
         fprintf(stderr, "lift: VitaGL tile texture creation failed\n");
         sys24_viewer_shutdown();
@@ -1039,6 +1044,27 @@ static void viewer_tile_tex_upload(int keep_black)
     if (!src)
         return;
 
+#if defined(I960_HOST_VITA_GL)
+    /* VitaGL: convert 0xAARRGGBB to RGBA bytes; the BGRA/_REV upload path is not used. */
+    if (!g_tile_alpha)
+        g_tile_alpha = (u32 *)malloc(n * sizeof(u32));
+    if (!g_tile_alpha)
+        return;
+    for (i = 0; i < n; i++) {
+        u32 p = src[i];
+        u32 a = (!keep_black && (p & 0x00ffffffu) == 0u) ? 0u : 0xffu;
+
+        if (a)
+            opaque++;
+        g_tile_alpha[i] = ((p >> 16) & 0xffu) | (p & 0xff00u)
+                        | ((p & 0xffu) << 16) | (a << 24);
+    }
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SYS24_FB_WIDTH, SYS24_FB_HEIGHT,
+                    GL_RGBA, GL_UNSIGNED_BYTE, g_tile_alpha);
+    (void)opaque;
+    return;
+#endif
+
     if (keep_black) {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SYS24_FB_WIDTH, SYS24_FB_HEIGHT,
                         GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, src);
@@ -1103,6 +1129,33 @@ static void draw_tile_quad(int vx, int vy, int vw, int vh, int fullscreen_opaque
     glLoadIdentity();
 
     glColor4f(1.f, 1.f, 1.f, 1.f);
+#if defined(I960_HOST_VITA_GL)
+    {
+        static const GLfloat verts[] = {
+            0.f, 0.f,
+            (float)SYS24_FB_WIDTH, 0.f,
+            (float)SYS24_FB_WIDTH, (float)SYS24_FB_HEIGHT,
+            0.f, (float)SYS24_FB_HEIGHT
+        };
+        static const GLfloat texcoords[] = {
+            0.f, 0.f,
+            1.f, 0.f,
+            1.f, 1.f,
+            0.f, 1.f
+        };
+
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glDisableClientState(GL_COLOR_ARRAY);
+        glDisableClientState(GL_NORMAL_ARRAY);
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        glVertexPointer(2, GL_FLOAT, 0, verts);
+        glTexCoordPointer(2, GL_FLOAT, 0, texcoords);
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+        glDisableClientState(GL_VERTEX_ARRAY);
+    }
+#else
     glBegin(GL_QUADS);
     glTexCoord2f(0.f, 0.f);
     glVertex2f(0.f, 0.f);
@@ -1113,6 +1166,7 @@ static void draw_tile_quad(int vx, int vy, int vw, int vh, int fullscreen_opaque
     glTexCoord2f(0.f, 1.f);
     glVertex2f(0.f, (float)SYS24_FB_HEIGHT);
     glEnd();
+#endif
     glDisable(GL_TEXTURE_2D);
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);
@@ -1342,8 +1396,10 @@ int sys24_viewer_flip(const u8 *tile_map, const u8 *char_ram, const u8 *palram)
     if (!g_open)
         return 0;
 
+    FLIP_LOG("begin");
     if (sys24_viewer_poll_events() != 0)
         return 1;
+    FLIP_LOG("events polled");
 
     /*
      * While paused, do not kick geo decode or advance tiles from new game
@@ -1367,18 +1423,24 @@ int sys24_viewer_flip(const u8 *tile_map, const u8 *char_ram, const u8 *palram)
             s_was_opaque2d = opaque2d;
         }
 
-        if (!g_paused && !opaque2d)
+        if (!g_paused && !opaque2d) {
+            FLIP_LOG("geo kick begin");
             model2_geo_kick();
+            FLIP_LOG("geo kick done");
+        }
 
         {
             u32 sig = viewer_tile_sig(tile_map, char_ram, palram);
             u32 generation;
             sys24_tile_bind(g_tile, tile_map, char_ram);
+            FLIP_LOG("tile refresh begin");
             if (!g_paused)
                 sys24_tile_ensure_refreshed(g_tile);
+            FLIP_LOG("tile refresh done");
             generation = sys24_tile_content_generation(g_tile);
 
-            if (!g_paused && (!g_tile_valid || sig != g_tile_sig
+                FLIP_LOG("tile bitmap draw begin");
+                if (!g_paused && (!g_tile_valid || sig != g_tile_sig
                               || generation != g_tile_generation)) {
                 sys24_tile_bind(g_tile, tile_map, char_ram);
                 /*
@@ -1598,19 +1660,25 @@ int sys24_viewer_flip(const u8 *tile_map, const u8 *char_ram, const u8 *palram)
              * Widescreen: tiles use hud rect; geo uses full geo rect.
              */
             if (opaque2d) {
+                FLIP_LOG("draw tile quad opaque");
                 draw_tile_quad(hdx, hdy, hdww, hdhh, 1, 1, g_bitmap);
             } else {
+                FLIP_LOG("draw tile quad");
                 draw_tile_quad(hdx, hdy, hdww, hdhh, 0, 0, g_bitmap);
+                FLIP_LOG("draw geo layer");
                 draw_geo_layer(gdx, gdy, gdww, gdhh,
                                have_hwproj ? &hwproj : NULL, have_hwproj, 0);
+                FLIP_LOG("draw priority quad");
                 if (g_bitmap_pri)
                     draw_tile_quad(hdx, hdy, hdww, hdhh, 0, 0, g_bitmap_pri);
             }
+            FLIP_LOG("draws done");
             g_tile_tex_dirty = 0;
             /* Capture geo letterbox (includes side pillars in 16:9). */
             viewer_record_from_gl_letterbox(gvx, gvy, gvw, gvh);
 #if defined(I960_HOST_VITA_GL)
             vita_gl_swap_buffers();
+            FLIP_LOG("swapped");
 #else
             SDL_GL_SwapWindow(g_window);
 #endif
