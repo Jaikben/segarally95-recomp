@@ -3,8 +3,17 @@
 #include "bitmap_font.h"
 #include "menu.h"
 #include "startup_log.h"
+#include "perf.h"
 
 #include <vitaGL.h>
+#if defined(SEGAMOD2_VITA_PERF)
+#include <psp2/kernel/processmgr.h>
+
+uint64_t vita_perf_now(void)
+{
+    return sceKernelGetProcessTimeWide();
+}
+#endif
 
 #include <stdint.h>
 #include <stdio.h>
@@ -14,6 +23,9 @@ enum {
     VITA_GL_WIDTH = 960,
     VITA_GL_HEIGHT = 544,
     VITA_GL_VRAM_BUDGET = 32 * 1024 * 1024,
+    VITA_GL_PARAM_BUFFER_SIZE = 8 * 1024 * 1024,
+    VITA_GL_VERTEX_BUFFER_SIZE = 4 * 1024 * 1024,
+    VITA_GL_VDM_BUFFER_SIZE = 1024 * 1024,
     VITA_MENU_WIDTH = VITA_GL_WIDTH / 2,
     VITA_MENU_HEIGHT = VITA_GL_HEIGHT / 2,
     VITA_MENU_HEADER_HEIGHT = 34
@@ -125,7 +137,20 @@ int vita_gl_open(void)
     if (g_initialized)
         return 0;
 
-    vita_startup_log("startup: VitaGL initialization begin (4x MSAA)\n");
+    vita_startup_log("startup: VitaGL initialization begin (MSAA off)\n");
+    /* 3D scenes need far more GPU parameter/vertex/VDM space than 2D menus. */
+    vglSetParamBufferSize(VITA_GL_PARAM_BUFFER_SIZE);
+    vglSetVertexBufferSize(VITA_GL_VERTEX_BUFFER_SIZE);
+    vglSetVDMBufferSize(VITA_GL_VDM_BUFFER_SIZE);
+    {
+        char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "startup: GPU buffers param=%u vertex=%u vdm=%u bytes\n",
+                 (unsigned)VITA_GL_PARAM_BUFFER_SIZE,
+                 (unsigned)VITA_GL_VERTEX_BUFFER_SIZE,
+                 (unsigned)VITA_GL_VDM_BUFFER_SIZE);
+        vita_startup_log(msg);
+    }
     vglInitExtended(0, VITA_GL_WIDTH, VITA_GL_HEIGHT, VITA_GL_VRAM_BUDGET,
                     SCE_GXM_MULTISAMPLE_NONE);
     vita_startup_log("startup: VitaGL surface initialized\n");
@@ -151,6 +176,7 @@ void vita_gl_swap_buffers(void)
 {
     static unsigned err_logged;
     GLenum e;
+    uint64_t start;
 
     if (!g_initialized)
         return;
@@ -163,7 +189,14 @@ void vita_gl_swap_buffers(void)
             err_logged++;
         }
     }
+    start = vita_perf_now();
     vglSwapBuffers(GL_FALSE);
+    {
+        uint64_t now = vita_perf_now();
+
+        vita_perf_add(VITA_PERF_SWAP_US, now - start);
+        vita_perf_presented(now);
+    }
 }
 
 static void present_menu_pixels(void);

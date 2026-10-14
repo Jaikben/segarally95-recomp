@@ -413,10 +413,12 @@ static void draw_solid_elements(const float *xyzuv, const unsigned char *rgb_by_
 }
 
 #if defined(I960_HOST_VITA_GL)
+#include "vita/perf.h"
 /*
- * VitaGL path: no GLSL, no stencil fillmap, no 32-bit indices. Each
+ * VitaGL path: no GLSL or 32-bit indices. Each
  * (sheet patch, palette) pair is baked on the CPU into a small RGBA texture;
  * mirror/wrap use GL_MIRRORED_REPEAT/GL_REPEAT, cutouts use alpha test.
+ * Stencil reproduces the desktop fillmap when the framebuffer supports it.
  */
 #ifndef GL_MIRRORED_REPEAT
 #define GL_MIRRORED_REPEAT 0x8370
@@ -491,6 +493,7 @@ static GLuint vtex_get(const model2_geo_tri_mat_t *m)
     u8 *px;
     GLuint tex;
     vtex_ent_t *ent;
+    uint64_t start;
 
     for (i = 0; i < g_vtex_n; i++) {
         const vtex_ent_t *e = &g_vtex[i];
@@ -498,10 +501,14 @@ static GLuint vtex_get(const model2_geo_tri_mat_t *m)
         if (e->used && e->colorbase == m->colorbase && e->lumabase == m->lumabase
             && e->sheet == m->sheet && e->flags == m->flags && e->luma == m->luma
             && e->px == m->patch_x && e->py == m->patch_y && e->pw == pw
-            && e->ph == ph)
+            && e->ph == ph) {
+            vita_perf_add(VITA_PERF_CACHE_HITS, 1);
             return e->tex;
+        }
     }
 
+    vita_perf_add(VITA_PERF_CACHE_MISSES, 1);
+    start = vita_perf_now();
     sheet = g_cpu_sheet[m->sheet & 1u];
     if (!sheet)
         return 0;
@@ -528,11 +535,15 @@ static GLuint vtex_get(const model2_geo_tri_mat_t *m)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)pw, (GLsizei)ph, 0, GL_RGBA,
                  GL_UNSIGNED_BYTE, px);
     free(px);
+    vita_perf_add(VITA_PERF_TEXTURE_US, vita_perf_now() - start);
+    vita_perf_add(VITA_PERF_UPLOADS, 1);
+    vita_perf_add(VITA_PERF_UPLOAD_BYTES, (uint64_t)pw * ph * 4u);
     vita_gl_check("texture upload");
 
     if (g_vtex_n < VTEX_CAP) {
         ent = &g_vtex[g_vtex_n++];
     } else {
+        vita_perf_add(VITA_PERF_CACHE_EVICTIONS, 1);
         ent = &g_vtex[g_vtex_clock++ % VTEX_CAP];
         glDeleteTextures(1, &ent->tex);
     }
@@ -564,7 +575,9 @@ static void vita_gl_check(const char *stage)
 }
 
 static void vita_draw_run(unsigned begin, unsigned end,
-                          const model2_geo_tri_mat_t *mats)
+                          const model2_geo_tri_mat_t *mats,
+                          enum vita_perf_metric draws,
+                          enum vita_perf_metric tris)
 {
     unsigned t, run_start = begin;
 
@@ -603,8 +616,15 @@ static void vita_draw_run(unsigned begin, unsigned end,
             glDisable(GL_TEXTURE_2D);
             glDisable(GL_ALPHA_TEST);
         }
-        glDrawArrays(GL_TRIANGLES, (GLint)(run_start * 3u),
-                     (GLsizei)((t - run_start) * 3u));
+        {
+            uint64_t start = vita_perf_now();
+
+            glDrawArrays(GL_TRIANGLES, (GLint)(run_start * 3u),
+                         (GLsizei)((t - run_start) * 3u));
+            vita_perf_add(VITA_PERF_DRAW_US, vita_perf_now() - start);
+            vita_perf_add(draws, 1);
+            vita_perf_add(tris, t - run_start);
+        }
         vita_gl_check((b->flags & MODEL2_GEO_TEX_TEXTURED) ? "draw textured batch"
                                                           : "draw solid batch");
         run_start = t;
@@ -618,6 +638,7 @@ static void vita_draw_textured(const float *xyzuv, const model2_geo_tri_mat_t *m
     static unsigned char *vcol;
     static unsigned cap;
     static int logged;
+    static GLint stencil_bits = -1;
     unsigned t, k;
     unsigned world_end = 0, solid_end = 0, opaque_end = 0;
     u32 psig;
@@ -625,6 +646,7 @@ static void vita_draw_textured(const float *xyzuv, const model2_geo_tri_mat_t *m
     u16 last_cb = 0xffffu, last_lb = 0xffffu;
     u8 last_luma = 0xffu;
     int have_rgb = 0;
+    uint64_t start;
 
     if (ensure_scratch(ntris) != 0)
         return;
@@ -654,11 +676,14 @@ static void vita_draw_textured(const float *xyzuv, const model2_geo_tri_mat_t *m
         g_vtex_palette_sig = psig;
     }
 
+    start = vita_perf_now();
     for (t = 0; t < ntris; t++)
         g_order[t] = t;
     g_sort_mats = mats;
     qsort(g_order, ntris, sizeof(unsigned), mat_order_cmp);
+    vita_perf_add(VITA_PERF_SORT_US, vita_perf_now() - start);
 
+    start = vita_perf_now();
     for (t = 0; t < ntris; t++) {
         const model2_geo_tri_mat_t *m = &mats[g_order[t]];
         int textured = (m->flags & MODEL2_GEO_TEX_TEXTURED) != 0;
@@ -690,6 +715,7 @@ static void vita_draw_textured(const float *xyzuv, const model2_geo_tri_mat_t *m
         }
     }
 
+    vita_perf_add(VITA_PERF_PACK_US, vita_perf_now() - start);
     while (world_end < ntris && !(mats[g_order[world_end]].pad & 1u))
         world_end++;
     while (solid_end < world_end
@@ -720,16 +746,53 @@ static void vita_draw_textured(const float *xyzuv, const model2_geo_tri_mat_t *m
     glTexCoordPointer(2, GL_FLOAT, 0, vuv);
     vita_gl_check("geo state setup");
 
-    glEnable(GL_DEPTH_TEST);
+    if (stencil_bits < 0) {
+        stencil_bits = 0;
+        glGetIntegerv(GL_STENCIL_BITS, &stencil_bits);
+        vita_gl_check("fillmap stencil capability query");
+        lift_log("lift: vita geo fillmap stencil_bits=%d\n", (int)stencil_bits);
+        if (stencil_bits == 0)
+            lift_log("lift: WARNING: Vita framebuffer has no stencil; "
+                     "using depth-only rendering without fillmap parity\n");
+    }
+
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDepthMask(GL_TRUE);
+    glStencilMask(0xffu);
+    glClearStencil(0);
+    glClear(GL_DEPTH_BUFFER_BIT
+            | (stencil_bits > 0 ? GL_STENCIL_BUFFER_BIT : 0));
+    vita_gl_check("fillmap initial clear");
+
+    /* A: solids seed depth without claiming fillmap pixels. */
+    glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
-    vita_draw_run(0, solid_end, mats);
+    vita_draw_run(0, solid_end, mats, VITA_PERF_SOLID_DRAWS, VITA_PERF_SOLID_TRIS);
+
+    /* B: first passing opaque texel claims its pixel and writes depth. */
     glDepthFunc(GL_LEQUAL);
-    vita_draw_run(solid_end, opaque_end, mats);
+    if (stencil_bits > 0) {
+        glEnable(GL_STENCIL_TEST);
+        glStencilFunc(GL_EQUAL, 0, 0xffu);
+        glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
+        vita_gl_check("opaque fillmap state");
+    }
+    vita_draw_run(solid_end, opaque_end, mats,
+                  VITA_PERF_OPAQUE_DRAWS, VITA_PERF_OPAQUE_TRIS);
+
+    /* C: fresh fillmap; alpha-rejected texels must leave it unclaimed. */
+    if (stencil_bits > 0) {
+        glClear(GL_STENCIL_BUFFER_BIT);
+        vita_gl_check("cutout fillmap clear");
+    }
     glDepthMask(GL_FALSE);
-    vita_draw_run(opaque_end, world_end, mats);
+    vita_draw_run(opaque_end, world_end, mats,
+                  VITA_PERF_CUTOUT_DRAWS, VITA_PERF_CUTOUT_TRIS);
+
+    glDisable(GL_STENCIL_TEST);
     glDisable(GL_DEPTH_TEST);
-    vita_draw_run(world_end, ntris, mats);
+    vita_draw_run(world_end, ntris, mats,
+                  VITA_PERF_OVERLAY_DRAWS, VITA_PERF_OVERLAY_TRIS);
 
     glDisable(GL_ALPHA_TEST);
     glDisable(GL_TEXTURE_2D);

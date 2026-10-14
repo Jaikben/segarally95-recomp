@@ -14,6 +14,7 @@
 #include "sys24_tile.h"
 #include "sys24_viewer_record.h"
 #include "model2_snd.h"
+#include "../vita/perf.h"
 #if defined(I960_HOST_VITA_GL)
 #include "../vita/vita_gl_renderer.h"
 #include "../vita/controls.h"
@@ -1046,10 +1047,13 @@ static void viewer_tile_tex_upload(int keep_black)
 
 #if defined(I960_HOST_VITA_GL)
     /* VitaGL: convert 0xAARRGGBB to RGBA bytes; the BGRA/_REV upload path is not used. */
+    uint64_t upload_start;
+
     if (!g_tile_alpha)
         g_tile_alpha = (u32 *)malloc(n * sizeof(u32));
     if (!g_tile_alpha)
         return;
+    upload_start = vita_perf_now();
     for (i = 0; i < n; i++) {
         u32 p = src[i];
         u32 a = (!keep_black && (p & 0x00ffffffu) == 0u) ? 0u : 0xffu;
@@ -1061,6 +1065,8 @@ static void viewer_tile_tex_upload(int keep_black)
     }
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SYS24_FB_WIDTH, SYS24_FB_HEIGHT,
                     GL_RGBA, GL_UNSIGNED_BYTE, g_tile_alpha);
+    vita_perf_add(VITA_PERF_TILE_UPLOAD_US, vita_perf_now() - upload_start);
+    vita_perf_add(VITA_PERF_TILE_UPLOAD_BYTES, (uint64_t)n * 4u);
     (void)opaque;
     return;
 #endif
@@ -1400,6 +1406,7 @@ int sys24_viewer_flip(const u8 *tile_map, const u8 *char_ram, const u8 *palram)
     if (sys24_viewer_poll_events() != 0)
         return 1;
     FLIP_LOG("events polled");
+    vita_perf_frame_begin();
 
     /*
      * While paused, do not kick geo decode or advance tiles from new game
@@ -1430,6 +1437,7 @@ int sys24_viewer_flip(const u8 *tile_map, const u8 *char_ram, const u8 *palram)
         }
 
         {
+            uint64_t tile_start = vita_perf_now();
             u32 sig = viewer_tile_sig(tile_map, char_ram, palram);
             u32 generation;
             sys24_tile_bind(g_tile, tile_map, char_ram);
@@ -1587,6 +1595,7 @@ int sys24_viewer_flip(const u8 *tile_map, const u8 *char_ram, const u8 *palram)
                 g_tile_valid = 1;
                 g_tile_tex_dirty = 1;
             }
+            vita_perf_add(VITA_PERF_TILE_PREP_US, vita_perf_now() - tile_start);
         }
 
 #if defined(I960_HOST_HAVE_GL)
@@ -1666,8 +1675,13 @@ int sys24_viewer_flip(const u8 *tile_map, const u8 *char_ram, const u8 *palram)
                 FLIP_LOG("draw tile quad");
                 draw_tile_quad(hdx, hdy, hdww, hdhh, 0, 0, g_bitmap);
                 FLIP_LOG("draw geo layer");
-                draw_geo_layer(gdx, gdy, gdww, gdhh,
-                               have_hwproj ? &hwproj : NULL, have_hwproj, 0);
+                {
+                    uint64_t geo_start = vita_perf_now();
+
+                    draw_geo_layer(gdx, gdy, gdww, gdhh,
+                                   have_hwproj ? &hwproj : NULL, have_hwproj, 0);
+                    vita_perf_add(VITA_PERF_GEO_US, vita_perf_now() - geo_start);
+                }
                 FLIP_LOG("draw priority quad");
                 if (g_bitmap_pri)
                     draw_tile_quad(hdx, hdy, hdww, hdhh, 0, 0, g_bitmap_pri);

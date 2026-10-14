@@ -81,8 +81,36 @@ Then:
 The Vita build uses **VitaGL**, an OpenGL-compatible layer running on the Vita's
 GXM GPU. It reuses the project's OpenGL scene compositor for the game: Sys24
 background tiles, textured Model 2 geometry, then priority tiles. VitaGL is
-initialized at 960x544 with 4x MSAA and a 32 MiB VRAM budget. SDL is used for
+initialized at 960x544 with MSAA disabled and a 32 MiB VRAM budget. SDL is used for
 audio and timing only; VitaGL owns the display and buffer swaps.
+
+The fixed-function Vita geometry path bakes palette textures to RGBA and uses
+client-array triangle batches, without runtime GLSL compilation. It follows the
+desktop fillmap passes: solids seed depth; opaque textured polygons claim the
+first depth-passing pixel using stencil and write depth; cutouts use a fresh
+stencil fillmap with alpha testing and no depth writes; overlays disable both
+depth and stencil tests. Cutout texel `0xF` is discarded, not alpha-blended.
+The first geometry draw logs `lift: vita geo fillmap stencil_bits=...`.
+If the framebuffer reports no stencil bits, an explicit warning is logged and
+the depth-only fallback remains available, without claiming fillmap parity.
+Stencil availability and GL error logs do not prove pixel correctness:
+overlapping textures, cutout holes and HUD layering still need real-Vita testing.
+
+Optional rendering profiling is enabled with `-DSEGAMOD2_VITA_PERF=ON`
+(default OFF). `VITA-PERF` writes one summary per second of game-view presents;
+launch/loading/pause-menu presents reset the window. Times use the Vita's
+monotonic microsecond process timer. `CPU_TOTAL_US` values are window totals:
+sorting, vertex packing, texture baking/upload, triangle draw submission, tile
+preparation, tile conversion/upload, the complete geometry layer and buffer
+swap. Geometry-layer time includes its nested preparation and draw timings;
+do not sum these overlapping measurements. Divide totals by `frames` for
+per-frame averages. Cache hits/misses, capacity evictions, upload counts/bytes,
+tile upload bytes and draw/triangle counts by pass are also window totals.
+Texture invalidations due to sheet/palette changes are not capacity evictions.
+Presentation interval average/max describe completed swap-call spacing, not
+physical display timestamps. GL call times measure CPU work/waiting, not GPU
+execution; no `glFinish` is added. Keep resolution, clocks and scene identical
+when comparing builds; profiling itself and existing error checks have overhead.
 
 Install VitaSDK and the target packages, then build with its cross toolchain:
 
@@ -127,7 +155,7 @@ on shutdown. The existing YAML writer is non-atomic; use Save and Quit rather
 than killing the application while it writes.
 
 The VitaGL lifecycle follows the minimal Daytona backend: initialize a
-960x544 surface with a 32 MiB VRAM budget and 4x MSAA, set the viewport, clear
+960x544 surface with a 32 MiB VRAM budget and MSAA disabled, set the viewport, clear
 the initial color/depth buffers, and present with `vglSwapBuffers(GL_FALSE)`.
 Rally's launch and pause menus are rasterized into a CPU-side bitmap and
 presented as a VitaGL texture quad. Startup markers go directly through native

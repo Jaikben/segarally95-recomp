@@ -119,7 +119,11 @@ endif()
 
 # --- Common flags / includes ------------------------------------------------
 add_library(segamod2_common INTERFACE)
+option(SEGAMOD2_VITA_PERF "Log one-second Vita rendering performance summaries" OFF)
 if(VITA)
+  if(SEGAMOD2_VITA_PERF)
+    target_compile_definitions(segamod2_common INTERFACE SEGAMOD2_VITA_PERF)
+  endif()
   target_compile_definitions(segamod2_common INTERFACE I960_HOST_VITA I960_HOST_VITA_GL)
   target_include_directories(segamod2_common INTERFACE ${SEGAMOD2_VITAGL_INCLUDE_DIR})
   target_link_libraries(segamod2_common INTERFACE
@@ -275,6 +279,9 @@ target_link_libraries(segamod2 PRIVATE
   model2_geo model2_hw model2_tgp model2_snd host_compat)
 if(VITA)
   target_sources(segamod2 PRIVATE src/vita/vita_gl_renderer.c src/vita/menu.c src/vita/frontend.c)
+  if(SEGAMOD2_VITA_PERF)
+    target_sources(segamod2 PRIVATE src/vita/perf.c)
+  endif()
   if(SEGAMOD2_VITA_AUTOSTART)
     target_compile_definitions(segamod2 PRIVATE SEGAMOD2_VITA_AUTOSTART)
   endif()
@@ -290,6 +297,11 @@ if(SEGAMOD2_BUILD_VITA_TESTS)
     message(FATAL_ERROR "Vita helper tests must run in a desktop build directory")
   endif()
   enable_testing()
+  add_executable(segamod2_vita_perf_tests tests/vita_perf_test.c src/vita/perf.c)
+  target_compile_definitions(segamod2_vita_perf_tests PRIVATE SEGAMOD2_VITA_PERF)
+  target_include_directories(segamod2_vita_perf_tests PRIVATE src/vita)
+  add_test(NAME vita-perf COMMAND segamod2_vita_perf_tests
+    "${CMAKE_CURRENT_BINARY_DIR}/vita-perf-test.log")
   add_executable(segamod2_vita_tests
     tests/vita_helpers_test.c src/vita/menu.c lib/model2/geo/model2_geo_order.c)
   target_include_directories(segamod2_vita_tests PRIVATE
